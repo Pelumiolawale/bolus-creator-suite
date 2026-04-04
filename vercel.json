@@ -1,4 +1,12 @@
 {
+  "headers": [
+    {
+      "source": "/tiktokeftfFPg85Ng9awRGlih6gyWhpwcD6UTv.html",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" }
+      ]
+    }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/" }
