@@ -5,7 +5,7 @@ import {
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { seedIfEmpty, saveSnapshot, computeGrowth } from "./lib/followerSnapshots.js";
-import { loadTags, setTag, computeCategoryBreakdown } from "./lib/postTags.js";
+import { loadTags, setTag, computeCategoryBreakdown, runMigrations as runPostTagMigrations } from "./lib/postTags.js";
 
 // ── Google Fonts ─────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -45,18 +45,9 @@ const T_dealTypeColor = {
 
 const INITIAL_DEALS = { inbound: [], negotiating: [], active: [], completed: [] };
 
-const EARNINGS = [
-  { month: "Aug", brandDeals: 0, affiliate: 0, ugc: 0 },
-  { month: "Sep", brandDeals: 0, affiliate: 0, ugc: 0 },
-  { month: "Oct", brandDeals: 0, affiliate: 0, ugc: 0 },
-  { month: "Nov", brandDeals: 0, affiliate: 0, ugc: 0 },
-  { month: "Dec", brandDeals: 0, affiliate: 0, ugc: 0 },
-  { month: "Jan", brandDeals: 0, affiliate: 0, ugc: 0 },
-];
-
-const CATEGORIES = ["Real Estate", "Finance", "Lifestyle", "Community", "Relationships"];
+const CATEGORIES = ["Home / Property", "Finance", "Lifestyle", "Community", "Relationships"];
 const CATEGORY_COLORS = {
-  "Real Estate": T.navy,
+  "Home / Property": T.navy,
   Finance: T.finance,
   Lifestyle: T.lifestyle,
   Community: T.community,
@@ -77,6 +68,44 @@ const INITIAL_POSTS = {};
 const fmt    = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 const fmtGBP = n => `£${Number(n).toLocaleString()}`;
 const fmtPct = n => `${(n).toFixed(1)}%`;
+
+// Calendar-store migrations. Lives next to the calendar's localStorage key so
+// a failure in postTag migrations doesn't block calendar migrations and vice
+// versa. Keep idempotent: each migration tag runs at most once per device.
+const CALENDAR_KEY = "bcs.posts.v1";
+const CALENDAR_MIGRATIONS_KEY = "bcs.posts.migrations.v1";
+
+function runCalendarMigrations() {
+  let applied = [];
+  try {
+    applied = JSON.parse(localStorage.getItem(CALENDAR_MIGRATIONS_KEY) || "[]");
+  } catch { applied = []; }
+
+  // Migration 1.4.1b — rename calendar entries' category "Real Estate" → "Home / Property"
+  if (!applied.includes("1.4.1b")) {
+    let raw;
+    try { raw = JSON.parse(localStorage.getItem(CALENDAR_KEY) || "null"); }
+    catch { raw = null; }
+    if (raw && typeof raw === "object") {
+      let changed = false;
+      for (const monthKey of Object.keys(raw)) {
+        const month = raw[monthKey];
+        if (!month || typeof month !== "object") continue;
+        for (const day of Object.keys(month)) {
+          const entry = month[day];
+          if (entry && entry.category === "Real Estate") {
+            month[day] = { ...entry, category: "Home / Property" };
+            changed = true;
+          }
+        }
+      }
+      if (changed) localStorage.setItem(CALENDAR_KEY, JSON.stringify(raw));
+    }
+    applied.push("1.4.1b");
+  }
+
+  localStorage.setItem(CALENDAR_MIGRATIONS_KEY, JSON.stringify(applied));
+}
 
 // Pull a stable post identifier (the shortcode) out of either a permalink
 // or a raw shortcode. Returns null if the input is unrecognisable.
@@ -516,14 +545,36 @@ function DealsSection() {
   const [deals, setDeals]    = useStored("bcs.deals.v1", INITIAL_DEALS);
   const [showModal, setShow] = useState(false);
   const [form, setForm]      = useState({ brand: "", type: "Paid", value: "", deliverables: "", deadline: "" });
+  // Completion-date confirmation modal state.
+  // Holds { id, fromCol, date } when a deal is being moved INTO Completed.
+  const [pendingComplete, setPendingComplete] = useState(null);
+
+  function applyMove(id, fromCol, toCol, patch) {
+    setDeals(prev => {
+      const card = prev[fromCol].find(d => d.id === id);
+      if (!card) return prev;
+      const updated = patch ? { ...card, ...patch } : card;
+      return { ...prev, [fromCol]: prev[fromCol].filter(d => d.id !== id), [toCol]: [...prev[toCol], updated] };
+    });
+  }
 
   function moveCard(id, fromCol, dir) {
     const toCol = COL_ORDER[COL_ORDER.indexOf(fromCol) + dir];
     if (!toCol) return;
-    setDeals(prev => {
-      const card = prev[fromCol].find(d => d.id === id);
-      return { ...prev, [fromCol]: prev[fromCol].filter(d => d.id !== id), [toCol]: [...prev[toCol], card] };
-    });
+    if (toCol === "completed") {
+      // Open the completion-date modal; don't move yet.
+      const today = new Date().toISOString().slice(0, 10);
+      setPendingComplete({ id, fromCol, date: today });
+      return;
+    }
+    applyMove(id, fromCol, toCol);
+  }
+
+  function confirmComplete() {
+    if (!pendingComplete) return;
+    const { id, fromCol, date } = pendingComplete;
+    applyMove(id, fromCol, "completed", { completedAt: date });
+    setPendingComplete(null);
   }
   function deleteCard(id, col) {
     setDeals(prev => ({ ...prev, [col]: prev[col].filter(d => d.id !== id) }));
@@ -565,6 +616,27 @@ function DealsSection() {
         <Input label="Deliverables" value={form.deliverables} onChange={v => setForm(f => ({ ...f, deliverables: v }))} />
         <Input label="Deadline"     value={form.deadline}     onChange={v => setForm(f => ({ ...f, deadline: v }))} type="date" />
         <SalmonBtn onClick={addDeal} full>Add to Pipeline</SalmonBtn>
+      </Modal>
+
+      <Modal open={!!pendingComplete} onClose={() => setPendingComplete(null)} title="When did this deal complete?">
+        <div style={{ marginTop: -8, marginBottom: 14, fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, lineHeight: 1.5 }}>
+          Used to track your earnings over time. Defaults to today — change if you got paid on a different date.
+        </div>
+        <Input
+          label="Completion date"
+          type="date"
+          value={pendingComplete?.date || ""}
+          onChange={v => setPendingComplete(p => p ? { ...p, date: v } : p)}
+        />
+        <div style={{ display: "flex", gap: 10 }}>
+          <SalmonBtn onClick={confirmComplete} full>Confirm</SalmonBtn>
+          <button
+            onClick={() => setPendingComplete(null)}
+            style={{ flex: 1, background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13, padding: "11px 20px" }}
+          >
+            Cancel
+          </button>
+        </div>
       </Modal>
     </div>
   );
@@ -847,6 +919,49 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
+// Best-effort completion date for a deal:
+//   v1.4.1+ deals carry an explicit completedAt
+//   pre-v1.4.1 fall back to the deadline if present
+//   anything else → null and gets dropped from the chart
+function deriveCompletedAt(deal) {
+  if (deal.completedAt) return deal.completedAt;
+  if (deal.deadline)    return deal.deadline;
+  return null;
+}
+
+function buildEarningsTrend(completedDeals, now = new Date()) {
+  // Build the 6-month axis ending in `now`
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
+    months.push({
+      key,
+      label: d.toLocaleString("en-GB", { month: "short" }),
+      brandDeals: 0,
+      affiliate: 0,
+      ugc: 0,
+    });
+  }
+  const byKey = Object.fromEntries(months.map(m => [m.key, m]));
+
+  for (const d of completedDeals) {
+    const dateStr = deriveCompletedAt(d);
+    if (!dateStr) continue;
+    const dt = new Date(dateStr);
+    if (isNaN(dt)) continue;
+    const key = `${dt.getFullYear()}-${String(dt.getMonth()).padStart(2, "0")}`;
+    const bucket = byKey[key];
+    if (!bucket) continue; // outside the 6-month window
+    const value = d.value || 0;
+    if (d.type === "Paid" || d.type === "Gifted + Paid") bucket.brandDeals += value;
+    else if (d.type === "Affiliate")                       bucket.affiliate  += value;
+    else                                                    bucket.ugc        += value;
+  }
+
+  return months;
+}
+
 function MoneySection({ igData }) {
   const [deals] = useStored("bcs.deals.v1", INITIAL_DEALS);
   const completed = deals.completed || [];
@@ -881,17 +996,23 @@ function MoneySection({ igData }) {
       </div>
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginBottom: 16 }}>
         <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 8 }}>6-Month Earnings Trend</div>
-        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginBottom: 16, fontStyle: "italic" }}>Placeholder — will populate as you log monthly completed deals.</div>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart data={EARNINGS} barCategoryGap="30%">
-            <XAxis dataKey="month" tick={{ fill: T.muted, fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fill: T.muted, fontSize: 11, fontFamily: "'DM Sans',sans-serif" }} axisLine={false} tickLine={false} tickFormatter={v => `£${v / 1000}k`} />
-            <Tooltip content={<CustomTooltip />} cursor={{ fill: T.salmonDim }} />
-            <Bar dataKey="brandDeals" stackId="a" fill={T.salmon}    name="Brand Deals" />
-            <Bar dataKey="affiliate"  stackId="a" fill={T.community} name="Affiliate" />
-            <Bar dataKey="ugc"        stackId="a" fill={T.lifestyle} name="UGC" radius={[4,4,0,0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginBottom: 16, fontStyle: "italic" }}>Last 6 months — calculated from your completed deals.</div>
+        {completed.length === 0 ? (
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.textSoft, lineHeight: 1.55, padding: "8px 0 4px" }}>
+            No completed deals yet. As you mark deals complete on the Brand Deals tab, they'll appear here.
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={buildEarningsTrend(completed)} barCategoryGap="30%">
+              <XAxis dataKey="label" tick={{ fill: T.muted, fontSize: 12, fontFamily: "'DM Sans',sans-serif" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: T.muted, fontSize: 11, fontFamily: "'DM Sans',sans-serif" }} axisLine={false} tickLine={false} tickFormatter={v => `£${v / 1000}k`} />
+              <Tooltip content={<CustomTooltip />} cursor={{ fill: T.salmonDim }} />
+              <Bar dataKey="brandDeals" stackId="a" fill={T.salmon}    name="Brand Deals" />
+              <Bar dataKey="affiliate"  stackId="a" fill={T.community} name="Affiliate" />
+              <Bar dataKey="ugc"        stackId="a" fill={T.lifestyle} name="UGC" radius={[4,4,0,0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
     </div>
   );
@@ -903,6 +1024,22 @@ function MoneySection({ igData }) {
 function MediaKitSection({ igData, insightsData, demosData }) {
   const kitRef = useRef(null);
   const [exporting, setExporting] = useState(false);
+  const [deals] = useStored("bcs.deals.v1", INITIAL_DEALS);
+  const completedDeals = deals.completed || [];
+
+  // Top brands by total spend across completed deals — deduped by brand name so
+  // a creator who's worked with the same brand twice gets one card with summed value.
+  const byBrand = new Map();
+  for (const d of completedDeals) {
+    const key = (d.brand || "").trim();
+    if (!key) continue;
+    const existing = byBrand.get(key) || { brand: key, totalValue: 0, id: d.id };
+    existing.totalValue += d.value || 0;
+    byBrand.set(key, existing);
+  }
+  const topBrands = [...byBrand.values()]
+    .sort((a, b) => b.totalValue - a.totalValue)
+    .slice(0, 10);
 
   const followers      = igData?.followers ?? null;
   const engagementRate = igData?.engagementRate ?? null;
@@ -1079,6 +1216,31 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           </div>
         </div>
 
+        {/* Brands I've Worked With — only renders when there's at least one completed deal */}
+        {topBrands.length > 0 && (
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>
+              Brands I've Worked With
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
+              {topBrands.map(b => (
+                <div key={b.id} style={{
+                  padding: "10px 12px",
+                  background: T.bg,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 5,
+                  textAlign: "center",
+                  fontFamily: "'Playfair Display',serif",
+                  fontSize: 14,
+                  color: T.text,
+                }}>
+                  {b.brand}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Footer */}
         <div style={{ paddingTop: 18, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>
           <div>hello@bybolutife.com · bybolutife.com</div>
@@ -1103,7 +1265,14 @@ export default function App() {
   const [demosData, setDemosData] = useState(null);
   const [calendarView, setCalendarView] = useState("calendar");
 
-  useEffect(() => { seedIfEmpty(); }, []);
+  useEffect(() => {
+    // Run migrations BEFORE seedIfEmpty so any pre-existing data is canonicalised
+    // before snapshot logic touches localStorage. Each migration is wrapped in a
+    // try/catch so a failure in one storage namespace doesn't block the others.
+    try { runPostTagMigrations(); } catch (e) { console.warn("postTag migrations failed", e); }
+    try { runCalendarMigrations(); } catch (e) { console.warn("calendar migrations failed", e); }
+    seedIfEmpty();
+  }, []);
 
   // Stable callbacks so AudienceSection's useEffect doesn't re-fire on every parent render
   const handleIg = useCallback(d => setIgData(d), []);

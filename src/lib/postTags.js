@@ -40,6 +40,31 @@ export function setManyTags(mediaIdToCategory) {
   return tags;
 }
 
+const MIGRATIONS_KEY = "bcs.postTags.migrations.v1";
+
+export function runMigrations() {
+  let applied = [];
+  try {
+    applied = JSON.parse(localStorage.getItem(MIGRATIONS_KEY) || "[]");
+  } catch { applied = []; }
+
+  // Migration 1.4.1a — rename "Real Estate" → "Home / Property"
+  if (!applied.includes("1.4.1a")) {
+    const tags = loadTags();
+    let changed = false;
+    for (const id of Object.keys(tags)) {
+      if (tags[id]?.category === "Real Estate") {
+        tags[id] = { ...tags[id], category: "Home / Property" };
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(KEY, JSON.stringify(tags));
+    applied.push("1.4.1a");
+  }
+
+  localStorage.setItem(MIGRATIONS_KEY, JSON.stringify(applied));
+}
+
 // Returns { totalTagged, byCategory: { [cat]: count }, percentages: { [cat]: pct } }
 export function computeCategoryBreakdown(allCategories) {
   const tags = loadTags();
