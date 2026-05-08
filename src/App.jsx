@@ -1,7 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer
 } from "recharts";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 // ── Google Fonts ─────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -11,38 +13,27 @@ fontLink.href =
 document.head.appendChild(fontLink);
 
 // ── Design tokens — Salmon + Cream ───────────────────────────────────────────
-// Warm, soft, lived-in. Cream as the primary surface, terracotta/salmon
-// as the accent. No more black + gold.
 const T = {
-  bg: "#FAF4ED",          // page background — warm cream
-  card: "#FFFFFF",         // card surface — clean white on cream
+  bg: "#FAF4ED",
+  card: "#FFFFFF",
   cardHover: "#FDF8F2",
-  border: "#E8DDD0",       // soft sand border
+  border: "#E8DDD0",
   borderStrong: "#D8C8B5",
-
-  // Salmon family — primary accent
-  salmon: "#E8896E",       // rich salmon
-  salmonLight: "#F2A98C",  // lighter salmon for gradients
+  salmon: "#E8896E",
+  salmonLight: "#F2A98C",
   salmonDim: "rgba(232,137,110,0.12)",
-
-  // Text
-  text: "#2A2420",         // deep warm brown — readable on cream
-  textSoft: "#6B5D52",     // softer body
-  muted: "#9A8B7E",        // muted warm grey
-
-  // Category colours — chosen to live happily next to salmon
-  navy: "#3C5A6B",         // slate teal — Real Estate
-  finance: "#C97B5C",       // burnt sienna — Finance
-  lifestyle: "#9C7B4A",     // warm tan — Lifestyle
-  community: "#7A8B6B",     // sage olive — Community
-  relationships: "#8E6F8E", // dusty mauve — Relationships
-
-  // Status
-  positive: "#5C8B6F",      // sage green for live / posted
-  warn: "#C28A4E",          // muted amber for warnings
+  text: "#2A2420",
+  textSoft: "#6B5D52",
+  muted: "#9A8B7E",
+  navy: "#3C5A6B",
+  finance: "#C97B5C",
+  lifestyle: "#9C7B4A",
+  community: "#7A8B6B",
+  relationships: "#8E6F8E",
+  positive: "#5C8B6F",
+  warn: "#C28A4E",
 };
 
-// Brand deals tracker uses these for type colouring
 const T_dealTypeColor = {
   Paid: T.salmon,
   Affiliate: T.community,
@@ -50,7 +41,7 @@ const T_dealTypeColor = {
   Gifted: T.lifestyle,
 };
 
-// ── Static mock data (non-Instagram sections — kept until real sources wired) ─
+// ── Static mock data (kept until real sources wired) ──────────────────────────
 const MOCK = {
   growth30: 18.4, growth60: 42.1, growth90: 112.3,
   estReach: 384000, engagementRate: 6.8,
@@ -62,12 +53,7 @@ const MOCK = {
   ],
 };
 
-const INITIAL_DEALS = {
-  inbound: [],
-  negotiating: [],
-  active: [],
-  completed: [],
-};
+const INITIAL_DEALS = { inbound: [], negotiating: [], active: [], completed: [] };
 
 const EARNINGS = [
   { month: "Aug", brandDeals: 0, affiliate: 0, ugc: 0 },
@@ -88,10 +74,11 @@ const CATEGORY_COLORS = {
 };
 
 const NAV = [
-  { id: "audience", label: "Audience",     icon: "◈" },
-  { id: "deals",    label: "Brand Deals",  icon: "◆" },
-  { id: "calendar", label: "Content",      icon: "▦" },
-  { id: "money",    label: "Monetisation", icon: "◎" },
+  { id: "audience",   label: "Audience",     icon: "◈" },
+  { id: "deals",      label: "Brand Deals",  icon: "◆" },
+  { id: "calendar",   label: "Content",      icon: "▦" },
+  { id: "money",      label: "Monetisation", icon: "◎" },
+  { id: "mediakit",   label: "Media Kit",    icon: "✦" },
 ];
 
 const INITIAL_POSTS = {};
@@ -99,28 +86,22 @@ const INITIAL_POSTS = {};
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const fmt    = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 const fmtGBP = n => `£${Number(n).toLocaleString()}`;
+const fmtPct = n => `${(n).toFixed(1)}%`;
 
-// localStorage hook — persists state across sessions so deals/calendar don't reset
 function useStored(key, initial) {
   const [val, setVal] = useState(() => {
     try {
       const raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : initial;
-    } catch {
-      return initial;
-    }
+    } catch { return initial; }
   });
   useEffect(() => {
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* ignore quota errors */ }
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* quota */ }
   }, [key, val]);
   return [val, setVal];
 }
 
 // ── Shared UI components ──────────────────────────────────────────────────────
-function Divider() {
-  return <div style={{ height: 1, background: T.border, margin: "20px 0" }} />;
-}
-
 function Tag({ children, color }) {
   return (
     <span style={{
@@ -203,24 +184,49 @@ function SalmonBtn({ onClick, children, full, disabled, loading }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SECTION 1 — Audience Overview  (calls /api/instagram)
+// SECTION 1 — Audience Overview
 // ══════════════════════════════════════════════════════════════════════════════
-function AudienceSection({ onIgData }) {
+function AudienceSection({ onIgData, onInsightsData, onDemographicsData }) {
   const [ig, setIg]         = useState(null);
   const [igErr, setIgErr]   = useState("");
   const [loading, setLoading] = useState(true);
+
+  const [insights, setInsights]       = useState(null);
+  const [insightsErr, setInsightsErr] = useState("");
+  const [insightsLoad, setInsightsLoad] = useState(true);
+
+  const [demos, setDemos]     = useState(null);
+  const [demosErr, setDemosErr] = useState("");
+  const [demosLoad, setDemosLoad] = useState(true);
 
   useEffect(() => {
     fetch("/api/instagram")
       .then(r => r.json())
       .then(data => {
         if (data.error) throw new Error(data.error);
-        setIg(data);
-        if (onIgData) onIgData(data);
+        setIg(data); if (onIgData) onIgData(data);
       })
       .catch(e => setIgErr(e.message))
       .finally(() => setLoading(false));
-  }, [onIgData]);
+
+    fetch("/api/instagram-insights?limit=12")
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
+        setInsights(data); if (onInsightsData) onInsightsData(data);
+      })
+      .catch(e => setInsightsErr(e.message))
+      .finally(() => setInsightsLoad(false));
+
+    fetch("/api/instagram-demographics")
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
+        setDemos(data); if (onDemographicsData) onDemographicsData(data);
+      })
+      .catch(e => setDemosErr(e.message))
+      .finally(() => setDemosLoad(false));
+  }, [onIgData, onInsightsData, onDemographicsData]);
 
   const followers      = ig?.followers      ?? null;
   const mediaCount     = ig?.mediaCount     ?? "—";
@@ -229,7 +235,7 @@ function AudienceSection({ onIgData }) {
 
   return (
     <div>
-      {/* Header + live status badge */}
+      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 28 }}>
         <SectionHeader
           title="Audience Overview"
@@ -239,11 +245,7 @@ function AudienceSection({ onIgData }) {
         <div>
           {loading  && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted }}>Fetching live data…</span>}
           {!loading && !igErr && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.positive }}>● Live · Instagram</span>}
-          {!loading && igErr  && (
-            <span title={igErr} style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.warn }}>
-              ⚠ {igErr.slice(0, 60)}
-            </span>
-          )}
+          {!loading && igErr  && <span title={igErr} style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.warn }}>⚠ {igErr.slice(0, 60)}</span>}
         </div>
       </div>
 
@@ -257,8 +259,14 @@ function AudienceSection({ onIgData }) {
         <StatCard label="Engagement Rate"  value={loading ? "…" : (engagementRate !== null ? `${engagementRate}%` : "—")} sub="Industry avg: 2.4%" accent={T.salmon} />
       </div>
 
+      {/* Top performing posts (NEW) */}
+      <TopPerformingPosts insights={insights} insightsLoad={insightsLoad} insightsErr={insightsErr} />
+
+      {/* Audience demographics (NEW) */}
+      <DemographicsBlock demos={demos} demosLoad={demosLoad} demosErr={demosErr} />
+
       {/* Category breakdown */}
-      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px" }}>
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginTop: 16 }}>
         <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 20 }}>Content Category Breakdown</div>
         {MOCK.categories.map(cat => (
           <div key={cat.name} style={{ marginBottom: 18 }}>
@@ -279,8 +287,122 @@ function AudienceSection({ onIgData }) {
   );
 }
 
+// ── Top Performing Posts (uses /api/instagram-insights) ──────────────────────
+function TopPerformingPosts({ insights, insightsLoad, insightsErr }) {
+  const top = (insights?.posts || []).slice(0, 4);
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text }}>Top Performing Posts</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Ranked by saves + shares — the metrics the algorithm rewards</div>
+        </div>
+        {insights && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● {insights.analysed} posts analysed</span>}
+      </div>
+
+      {insightsLoad && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted, padding: "20px 0" }}>Loading post insights…</div>}
+      {insightsErr && !insightsLoad && (
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.warn, padding: "12px 14px", background: T.salmonDim, borderRadius: 6 }}>
+          ⚠ {insightsErr}
+          <div style={{ fontSize: 11, color: T.textSoft, marginTop: 6 }}>If this says insufficient permissions, your token needs the <code>instagram_manage_insights</code> scope.</div>
+        </div>
+      )}
+      {!insightsLoad && !insightsErr && top.length === 0 && (
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted, padding: "20px 0", fontStyle: "italic" }}>No posts analysed yet.</div>
+      )}
+
+      {top.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 14 }}>
+          {top.map(p => {
+            const i = p.insights || {};
+            const captionPreview = (p.caption || "(no caption)").slice(0, 80) + (p.caption?.length > 80 ? "…" : "");
+            const date = p.timestamp ? new Date(p.timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+            return (
+              <a key={p.id} href={p.permalink || "#"} target="_blank" rel="noopener noreferrer"
+                 style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: 14, textDecoration: "none", color: "inherit", display: "block", transition: "border-color 0.2s, transform 0.15s" }}
+                 onMouseEnter={e => { e.currentTarget.style.borderColor = T.salmon + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                 onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "none"; }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <Tag color={T.salmon}>{p.media_product_type === "REELS" ? "Reel" : (p.media_type || "Post")}</Tag>
+                  <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>{date}</span>
+                </div>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.text, lineHeight: 1.5, minHeight: 50, marginBottom: 12 }}>
+                  {captionPreview}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 6, fontFamily: "'DM Sans',sans-serif", fontSize: 11 }}>
+                  <div><span style={{ color: T.muted }}>Reach </span><span style={{ color: T.text, fontWeight: 600 }}>{i.reach != null ? fmt(i.reach) : "—"}</span></div>
+                  <div><span style={{ color: T.muted }}>Saves </span><span style={{ color: T.salmon, fontWeight: 600 }}>{i.saved != null ? fmt(i.saved) : "—"}</span></div>
+                  <div><span style={{ color: T.muted }}>Shares </span><span style={{ color: T.salmon, fontWeight: 600 }}>{i.shares != null ? fmt(i.shares) : "—"}</span></div>
+                  <div><span style={{ color: T.muted }}>Likes </span><span style={{ color: T.text, fontWeight: 600 }}>{i.likes != null ? fmt(i.likes) : (p.like_count != null ? fmt(p.like_count) : "—")}</span></div>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Demographics block (uses /api/instagram-demographics) ────────────────────
+function DemographicsBlock({ demos, demosLoad, demosErr }) {
+  const hasData = demos && (demos.age?.length || demos.gender?.length || demos.country?.length);
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text }}>Audience Demographics</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Last 90 days · the data brand pitches actually need</div>
+        </div>
+        {hasData && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● Live</span>}
+      </div>
+
+      {demosLoad && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted, padding: "20px 0" }}>Loading demographics…</div>}
+      {demosErr && !demosLoad && (
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.warn, padding: "12px 14px", background: T.salmonDim, borderRadius: 6 }}>
+          ⚠ {demosErr}
+          <div style={{ fontSize: 11, color: T.textSoft, marginTop: 6 }}>This requires the <code>instagram_manage_insights</code> scope on your token. If the error mentions permissions, regenerate the token in Meta Developer Portal with that scope enabled.</div>
+        </div>
+      )}
+
+      {hasData && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 24 }}>
+          <DemoBars title="Age" rows={demos.age} />
+          <DemoBars title="Gender" rows={demos.gender} />
+          <DemoBars title="Top Countries" rows={demos.country} />
+          <DemoBars title="Top Cities" rows={demos.city} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DemoBars({ title, rows }) {
+  if (!rows || rows.length === 0) return null;
+  const total = rows.reduce((s, r) => s + (r.value || 0), 0) || 1;
+  return (
+    <div>
+      <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>{title}</div>
+      {rows.slice(0, 6).map(r => {
+        const pct = (r.value / total) * 100;
+        return (
+          <div key={r.key} style={{ marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "'DM Sans',sans-serif", fontSize: 12, marginBottom: 4 }}>
+              <span style={{ color: T.text }}>{r.key}</span>
+              <span style={{ color: T.salmon, fontWeight: 600 }}>{fmtPct(pct)}</span>
+            </div>
+            <div style={{ height: 4, background: T.border, borderRadius: 2 }}>
+              <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${T.salmon}, ${T.salmonLight})`, borderRadius: 2 }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
-// SECTION 2 — Brand Deals Tracker (now persisted to localStorage)
+// SECTION 2 — Brand Deals Tracker
 // ══════════════════════════════════════════════════════════════════════════════
 const COL_ORDER = ["inbound", "negotiating", "active", "completed"];
 const COLUMNS   = [{ id: "inbound", label: "Inbound" }, { id: "negotiating", label: "Negotiating" }, { id: "active", label: "Active" }, { id: "completed", label: "Completed" }];
@@ -324,11 +446,9 @@ function DealsSection() {
       return { ...prev, [fromCol]: prev[fromCol].filter(d => d.id !== id), [toCol]: [...prev[toCol], card] };
     });
   }
-
   function deleteCard(id, col) {
     setDeals(prev => ({ ...prev, [col]: prev[col].filter(d => d.id !== id) }));
   }
-
   function addDeal() {
     if (!form.brand) return;
     setDeals(prev => ({ ...prev, inbound: [...prev.inbound, { id: `d${Date.now()}`, ...form, value: parseInt(form.value) || 0 }] }));
@@ -372,7 +492,7 @@ function DealsSection() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SECTION 3 — Content Calendar (persisted to localStorage)
+// SECTION 3 — Content Calendar
 // ══════════════════════════════════════════════════════════════════════════════
 const STATUS_COLORS = { Posted: T.positive, Scheduled: T.salmon, Draft: T.muted };
 
@@ -388,7 +508,6 @@ function CalendarSection() {
   const firstDay = new Date(viewYear, viewMonth, 1).getDay();
   const monthKey = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
   const monthPosts = posts[monthKey] || {};
-
   const monthName = new Date(viewYear, viewMonth, 1).toLocaleString("en-GB", { month: "long", year: "numeric" });
 
   function openDay(day) {
@@ -396,9 +515,7 @@ function CalendarSection() {
     setForm(monthPosts[day] || { category: "Finance", platform: "Reel", caption: "", status: "Draft" });
   }
   function save() {
-    if (form.caption) {
-      setPosts(p => ({ ...p, [monthKey]: { ...(p[monthKey] || {}), [selected]: form } }));
-    }
+    if (form.caption) setPosts(p => ({ ...p, [monthKey]: { ...(p[monthKey] || {}), [selected]: form } }));
     setSel(null);
   }
   function remove() {
@@ -409,7 +526,6 @@ function CalendarSection() {
     });
     setSel(null);
   }
-
   function shiftMonth(delta) {
     let m = viewMonth + delta;
     let y = viewYear;
@@ -417,7 +533,6 @@ function CalendarSection() {
     if (m > 11) { m = 0; y += 1; }
     setViewMonth(m); setViewYear(y);
   }
-
   const cells = [...Array(firstDay).fill(null), ...Array.from({ length: days }, (_, i) => i + 1)];
 
   return (
@@ -455,8 +570,7 @@ function CalendarSection() {
                 transition: "border-color 0.15s",
               }}
                 onMouseEnter={e => day && (e.currentTarget.style.borderColor = T.salmon + "80")}
-                onMouseLeave={e => day && (e.currentTarget.style.borderColor = post ? CATEGORY_COLORS[post.category] + "55" : T.border)}
-              >
+                onMouseLeave={e => day && (e.currentTarget.style.borderColor = post ? CATEGORY_COLORS[post.category] + "55" : T.border)}>
                 {day && <>
                   <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: post ? T.text : T.textSoft, fontWeight: post ? 600 : 400, marginBottom: 4 }}>{day}</div>
                   {post && <>
@@ -485,7 +599,7 @@ function CalendarSection() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SECTION 4 — Monetisation (now driven by real deals data)
+// SECTION 4 — Monetisation
 // ══════════════════════════════════════════════════════════════════════════════
 const GOAL = 10000;
 
@@ -502,10 +616,7 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 function MoneySection({ igData }) {
-  // Pull deals from localStorage so this section reflects what the user actually tracks.
   const [deals] = useStored("bcs.deals.v1", INITIAL_DEALS);
-
-  // Total earned = sum of all completed deals, broken down by type.
   const completed = deals.completed || [];
   const earnedByType = completed.reduce((acc, d) => {
     const k = d.type === "Paid" || d.type === "Gifted + Paid" ? "brandDeals"
@@ -514,15 +625,8 @@ function MoneySection({ igData }) {
     acc[k] = (acc[k] || 0) + (d.value || 0);
     return acc;
   }, { brandDeals: 0, affiliate: 0, ugc: 0 });
-
   const monthTotal = earnedByType.brandDeals + earnedByType.affiliate + earnedByType.ugc;
   const pct = Math.min((monthTotal / GOAL) * 100, 100);
-
-  const followers = igData?.followers ?? null;
-  const engagement = igData?.engagementRate ?? null;
-
-  const followersLabel = followers !== null ? fmt(followers) : "—";
-  const engagementLabel = engagement !== null ? `${engagement}%` : "—";
 
   return (
     <div>
@@ -557,29 +661,191 @@ function MoneySection({ igData }) {
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <div style={{ background: `linear-gradient(135deg, #FFFFFF 0%, ${T.cardHover} 100%)`, border: `1px solid ${T.salmon}55`, borderRadius: 8, padding: "28px 32px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-          <div>
-            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 20, color: T.text, marginBottom: 4 }}>Media Kit Snapshot</div>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted }}>Live stats for brand pitches</div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 5 — Media Kit (NEW — exportable to PDF)
+// ══════════════════════════════════════════════════════════════════════════════
+function MediaKitSection({ igData, insightsData, demosData }) {
+  const kitRef = useRef(null);
+  const [exporting, setExporting] = useState(false);
+
+  const followers      = igData?.followers ?? null;
+  const engagementRate = igData?.engagementRate ?? null;
+  const username       = igData?.username ?? "bybolutife";
+
+  const topPost = insightsData?.posts?.[0];
+
+  // Derive top-line audience facts for the brand-pitch summary line
+  const topCountry = demosData?.country?.[0];
+  const topAge     = demosData?.age?.[0];
+  const genderTotal = (demosData?.gender || []).reduce((s, g) => s + g.value, 0);
+  const womenPct = genderTotal && demosData?.gender?.find(g => g.key.toUpperCase() === "F")
+    ? Math.round((demosData.gender.find(g => g.key.toUpperCase() === "F").value / genderTotal) * 100)
+    : null;
+
+  async function exportPDF() {
+    if (!kitRef.current) return;
+    setExporting(true);
+    try {
+      // Render the kit to canvas at 2x for crisp print quality
+      const canvas = await html2canvas(kitRef.current, {
+        scale: 2,
+        backgroundColor: "#FAF4ED",
+        useCORS: true,
+        logging: false,
+      });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+      const pdfWidth  = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgRatio = canvas.height / canvas.width;
+      const renderWidth  = pdfWidth - 40; // 20pt margin each side
+      const renderHeight = renderWidth * imgRatio;
+
+      let yPos = 20;
+      let remaining = renderHeight;
+      // If the kit is taller than one page, paginate
+      if (renderHeight <= pdfHeight - 40) {
+        pdf.addImage(imgData, "PNG", 20, 20, renderWidth, renderHeight);
+      } else {
+        // Slice across multiple pages
+        const pageImgHeight = pdfHeight - 40;
+        const sourcePxPerPdfPt = canvas.width / renderWidth;
+        const pageSourceHeight = pageImgHeight * sourcePxPerPdfPt;
+        let sourceY = 0;
+        while (sourceY < canvas.height) {
+          const sliceCanvas = document.createElement("canvas");
+          sliceCanvas.width = canvas.width;
+          sliceCanvas.height = Math.min(pageSourceHeight, canvas.height - sourceY);
+          const ctx = sliceCanvas.getContext("2d");
+          ctx.drawImage(canvas, 0, sourceY, canvas.width, sliceCanvas.height, 0, 0, canvas.width, sliceCanvas.height);
+          const sliceData = sliceCanvas.toDataURL("image/png");
+          const sliceRenderHeight = sliceCanvas.height / sourcePxPerPdfPt;
+          if (sourceY > 0) pdf.addPage();
+          pdf.addImage(sliceData, "PNG", 20, 20, renderWidth, sliceRenderHeight);
+          sourceY += pageSourceHeight;
+        }
+      }
+
+      pdf.save(`ByBolutife-MediaKit-${new Date().toISOString().slice(0,10)}.pdf`);
+    } catch (err) {
+      alert("Export failed: " + err.message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
+        <SectionHeader title="Media Kit" sub="One-click PDF for brand outreach. Auto-fills with live Instagram data." noMargin />
+        <SalmonBtn onClick={exportPDF} loading={exporting} disabled={!igData}>
+          {exporting ? "Exporting…" : "↓ Download PDF"}
+        </SalmonBtn>
+      </div>
+
+      {/* The exportable card — wrapped in a container with the cream background so the PDF matches */}
+      <div ref={kitRef} style={{ background: T.bg, padding: 32, borderRadius: 8, border: `1px solid ${T.border}` }}>
+
+        {/* Header */}
+        <div style={{ borderBottom: `2px solid ${T.salmon}`, paddingBottom: 24, marginBottom: 28 }}>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 36, color: T.text, fontWeight: 700, lineHeight: 1.1 }}>ByBolutife</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.salmon, marginTop: 6, letterSpacing: "0.04em" }}>@{username} · UK Home & Money Creator</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontStyle: "italic", fontSize: 16, color: T.textSoft, marginTop: 14, maxWidth: 540, lineHeight: 1.5 }}>
+            Building a home and a life — one intentional decision at a time.
           </div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.salmon, border: `1px solid ${T.salmon}`, borderRadius: 4, padding: "4px 10px", letterSpacing: "0.1em", textTransform: "uppercase" }}>Ready to share</div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 16 }}>
+
+        {/* Top stats */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 28 }}>
           {[
-            { label: "Followers",       val: followersLabel },
-            { label: "Engagement",      val: engagementLabel },
-            { label: "Avg. Reach",      val: fmt(MOCK.estReach) },
-            { label: "Monthly Growth",  val: `+${MOCK.growth30}%` },
-            { label: "Niche",           val: "Home & Money" },
-            { label: "Avg. Deal",       val: completed.length ? fmtGBP(Math.round(monthTotal / completed.length)) : "—" },
+            { label: "Followers",        val: followers !== null ? fmt(followers) : "—" },
+            { label: "Engagement Rate",  val: engagementRate !== null ? `${engagementRate}%` : "—" },
+            { label: "Industry Avg",     val: "2.4%" },
+            { label: "Avg. Post Reach",  val: fmt(MOCK.estReach) },
           ].map(s => (
-            <div key={s.label} style={{ textAlign: "center", padding: "14px 10px", background: T.bg, borderRadius: 6, border: `1px solid ${T.border}` }}>
-              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.salmon, fontWeight: 700 }}>{s.val}</div>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 4, letterSpacing: "0.05em" }}>{s.label}</div>
+            <div key={s.label} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "16px 14px", textAlign: "center" }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 22, color: T.salmon, fontWeight: 700 }}>{s.val}</div>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>{s.label}</div>
             </div>
           ))}
         </div>
+
+        {/* Audience snapshot — pitch-friendly summary line */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>The Audience</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: T.text, lineHeight: 1.55 }}>
+            {womenPct !== null ? `${womenPct}% women` : "Women-led audience"}
+            {topAge ? `, predominantly aged ${topAge.key}` : ", aged 25–44"}
+            {topCountry ? `, based in ${topCountry.key}` : ", UK-based"}.
+            {" "}High intent around home buying, personal finance, and intentional adult life decisions.
+          </div>
+        </div>
+
+        {/* Demographics breakdown — only if data is present */}
+        {demosData && (demosData.age?.length || demosData.country?.length) && (
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Demographics · Last 90 Days</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 24 }}>
+              <DemoBars title="Age" rows={demosData.age} />
+              <DemoBars title="Top Cities" rows={demosData.city} />
+            </div>
+          </div>
+        )}
+
+        {/* Top performing post */}
+        {topPost && (
+          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Top Performing Post</div>
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 14, color: T.text, lineHeight: 1.55, marginBottom: 14, fontStyle: "italic" }}>
+              "{(topPost.caption || "").slice(0, 180)}{topPost.caption?.length > 180 ? "…" : ""}"
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
+              {[
+                { label: "Reach",  val: topPost.insights?.reach != null ? fmt(topPost.insights.reach) : "—" },
+                { label: "Saves",  val: topPost.insights?.saved != null ? fmt(topPost.insights.saved) : "—" },
+                { label: "Shares", val: topPost.insights?.shares != null ? fmt(topPost.insights.shares) : "—" },
+                { label: "Likes",  val: topPost.insights?.likes != null ? fmt(topPost.insights.likes) : (topPost.like_count != null ? fmt(topPost.like_count) : "—") },
+              ].map(s => (
+                <div key={s.label} style={{ textAlign: "center" }}>
+                  <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.salmon, fontWeight: 700 }}>{s.val}</div>
+                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 2, letterSpacing: "0.06em", textTransform: "uppercase" }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Brand pillars */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Brand Pillars</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 14 }}>
+            {[
+              { name: "Wealth",       desc: "Property, investing, career, earning power" },
+              { name: "Lifestyle",    desc: "Home, design, peace, environment" },
+              { name: "Relationships",desc: "Romantic alignment, friendships, standards" },
+              { name: "Identity",     desc: "Confidence, boundaries, intentional choices" },
+            ].map(p => (
+              <div key={p.name} style={{ borderLeft: `3px solid ${T.salmon}`, paddingLeft: 12 }}>
+                <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, color: T.text, fontWeight: 600 }}>{p.name}</div>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 2 }}>{p.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ paddingTop: 18, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>
+          <div>hello@bybolutife.com · bybolutife.com</div>
+          <div>Generated {new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, fontStyle: "italic" }}>
+        The PDF will mirror this layout exactly. Values that show "—" indicate Instagram hasn't returned data yet (or the metric isn't available for the connected account type).
       </div>
     </div>
   );
@@ -591,12 +857,20 @@ function MoneySection({ igData }) {
 export default function App() {
   const [active, setActive] = useState("audience");
   const [igData, setIgData] = useState(null);
+  const [insightsData, setInsightsData] = useState(null);
+  const [demosData, setDemosData] = useState(null);
+
+  // Stable callbacks so AudienceSection's useEffect doesn't re-fire on every parent render
+  const handleIg = useCallback(d => setIgData(d), []);
+  const handleInsights = useCallback(d => setInsightsData(d), []);
+  const handleDemos = useCallback(d => setDemosData(d), []);
 
   const SECTIONS = {
-    audience: <AudienceSection onIgData={setIgData} />,
+    audience: <AudienceSection onIgData={handleIg} onInsightsData={handleInsights} onDemographicsData={handleDemos} />,
     deals:    <DealsSection />,
     calendar: <CalendarSection />,
     money:    <MoneySection igData={igData} />,
+    mediakit: <MediaKitSection igData={igData} insightsData={insightsData} demosData={demosData} />,
   };
 
   const followersLabel = igData?.followers ? fmt(igData.followers) + " followers" : "Connecting…";
@@ -614,7 +888,6 @@ export default function App() {
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
       `}</style>
 
-      {/* Sidebar */}
       <aside style={{ width: 220, flexShrink: 0, background: T.card, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", padding: "32px 0" }}>
         <div style={{ padding: "0 24px 32px" }}>
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: T.salmon, fontWeight: 700, letterSpacing: "0.02em" }}>Bolus Creator Suite</div>
@@ -643,7 +916,6 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main */}
       <main style={{ flex: 1, overflowY: "auto", padding: "40px 44px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 36 }}>
           <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted }}>{todayStr}</div>
