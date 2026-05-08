@@ -4,6 +4,7 @@ import {
 } from "recharts";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
+import { seedIfEmpty, saveSnapshot, computeGrowth } from "./lib/followerSnapshots.js";
 
 // ── Google Fonts ─────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -41,17 +42,13 @@ const T_dealTypeColor = {
   Gifted: T.lifestyle,
 };
 
-// ── Static mock data (kept until real sources wired) ──────────────────────────
-const MOCK = {
-  growth30: 18.4, growth60: 42.1, growth90: 112.3,
-  estReach: 384000, engagementRate: 6.8,
-  categories: [
-    { name: "Real Estate",     pct: 38, color: T.navy },
-    { name: "Finance",         pct: 29, color: T.finance },
-    { name: "Community",       pct: 20, color: T.community },
-    { name: "Relationships",   pct: 13, color: T.relationships },
-  ],
-};
+// Estimated content category breakdown — still mock until post tagging is wired.
+const ESTIMATED_CATEGORIES = [
+  { name: "Real Estate",     pct: 38, color: T.navy },
+  { name: "Finance",         pct: 29, color: T.finance },
+  { name: "Community",       pct: 20, color: T.community },
+  { name: "Relationships",   pct: 13, color: T.relationships },
+];
 
 const INITIAL_DEALS = { inbound: [], negotiating: [], active: [], completed: [] };
 
@@ -124,6 +121,28 @@ function StatCard({ label, value, sub, accent }) {
       <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 28, color: accent || T.text, fontWeight: 700, lineHeight: 1 }}>{value}</div>
       {sub && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted, marginTop: 6 }}>{sub}</div>}
     </div>
+  );
+}
+
+function GrowthCard({ label, growth, target }) {
+  if (!growth || growth.insufficient) {
+    return (
+      <StatCard
+        label={label}
+        value="—"
+        sub={`Tracking… ${growth?.daysCollected ?? 0}/${target} days`}
+        accent={T.muted}
+      />
+    );
+  }
+  const sign = growth.pct >= 0 ? "+" : "";
+  return (
+    <StatCard
+      label={label}
+      value={`${sign}${growth.pct.toFixed(1)}%`}
+      sub={`vs ${growth.basis.date}`}
+      accent={growth.pct >= 0 ? T.positive : T.warn}
+    />
   );
 }
 
@@ -233,6 +252,20 @@ function AudienceSection({ onIgData, onInsightsData, onDemographicsData }) {
   const username       = ig?.username       ?? "bybolutife";
   const engagementRate = ig?.engagementRate ?? null;
 
+  // Persist a daily snapshot once we have a real follower count.
+  useEffect(() => {
+    if (typeof followers === "number" && followers > 0) saveSnapshot(followers);
+  }, [followers]);
+
+  const g30 = followers !== null ? computeGrowth(followers, 30) : null;
+  const g60 = followers !== null ? computeGrowth(followers, 60) : null;
+  const g90 = followers !== null ? computeGrowth(followers, 90) : null;
+
+  const reachPosts = (insights?.posts || []).filter(p => p.insights?.reach != null);
+  const avgReach = reachPosts.length
+    ? Math.round(reachPosts.reduce((s, p) => s + p.insights.reach, 0) / reachPosts.length)
+    : null;
+
   return (
     <div>
       {/* Header */}
@@ -253,10 +286,15 @@ function AudienceSection({ onIgData, onInsightsData, onDemographicsData }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 14, marginBottom: 24 }}>
         <StatCard label="Total Followers"  value={loading ? "…" : (followers !== null ? fmt(followers) : "—")} sub={ig ? "Live · Instagram" : "Connect Instagram"} accent={T.salmon} />
         <StatCard label="Total Posts"      value={loading ? "…" : String(mediaCount)} sub="Published media" accent={T.salmon} />
-        <StatCard label="30-Day Growth"    value={`+${MOCK.growth30}%`} sub="vs previous period (mock)" accent={T.positive} />
-        <StatCard label="60-Day Growth"    value={`+${MOCK.growth60}%`} sub="6,200 new followers (mock)" accent={T.positive} />
-        <StatCard label="Est. Reach"       value={fmt(MOCK.estReach)}    sub="Average post reach (mock)" />
-        <StatCard label="Engagement Rate"  value={loading ? "…" : (engagementRate !== null ? `${engagementRate}%` : "—")} sub="Industry avg: 2.4%" accent={T.salmon} />
+        <GrowthCard label="30-Day Growth"  growth={g30} target={30} />
+        <GrowthCard label="60-Day Growth"  growth={g60} target={60} />
+        <GrowthCard label="90-Day Growth"  growth={g90} target={90} />
+        <StatCard
+          label="Avg. Reach"
+          value={avgReach === null ? "…" : fmt(avgReach)}
+          sub={avgReach === null ? "Loading…" : `Avg of last ${reachPosts.length} posts`}
+        />
+        <StatCard label="Engagement Rate"  value={loading ? "…" : (engagementRate !== null ? `${engagementRate}%` : "—")} sub="Last 20 posts · live" accent={T.salmon} />
       </div>
 
       {/* Top performing posts (NEW) */}
@@ -268,7 +306,7 @@ function AudienceSection({ onIgData, onInsightsData, onDemographicsData }) {
       {/* Category breakdown */}
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginTop: 16 }}>
         <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 20 }}>Content Category Breakdown</div>
-        {MOCK.categories.map(cat => (
+        {ESTIMATED_CATEGORIES.map(cat => (
           <div key={cat.name} style={{ marginBottom: 18 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
               <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text }}>{cat.name}</span>
@@ -686,6 +724,16 @@ function MediaKitSection({ igData, insightsData, demosData }) {
     ? Math.round((demosData.gender.find(g => g.key.toUpperCase() === "F").value / genderTotal) * 100)
     : null;
 
+  // Avg reach across the posts we have insights for — drives the media kit headline stat.
+  const reachPosts = (insightsData?.posts || []).filter(p => p.insights?.reach != null);
+  const avgReach = reachPosts.length
+    ? Math.round(reachPosts.reduce((s, p) => s + p.insights.reach, 0) / reachPosts.length)
+    : null;
+
+  // Growth figures driven by the seeded snapshot store.
+  const g8mo = followers !== null ? computeGrowth(followers, 240) : null;
+  const g90  = followers !== null ? computeGrowth(followers, 90)  : null;
+
   async function exportPDF() {
     if (!kitRef.current) return;
     setExporting(true);
@@ -764,8 +812,8 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           {[
             { label: "Followers",        val: followers !== null ? fmt(followers) : "—" },
             { label: "Engagement Rate",  val: engagementRate !== null ? `${engagementRate}%` : "—" },
-            { label: "Industry Avg",     val: "2.4%" },
-            { label: "Avg. Post Reach",  val: fmt(MOCK.estReach) },
+            { label: "Growth (8 months)", val: !g8mo || g8mo.insufficient ? "—" : `+${g8mo.pct.toFixed(0)}%` },
+            { label: "Avg. Post Reach",  val: avgReach !== null ? fmt(avgReach) : "—" },
           ].map(s => (
             <div key={s.label} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "16px 14px", textAlign: "center" }}>
               <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 22, color: T.salmon, fontWeight: 700 }}>{s.val}</div>
@@ -781,7 +829,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
             {womenPct !== null ? `${womenPct}% women` : "Women-led audience"}
             {topAge ? `, predominantly aged ${topAge.key}` : ", aged 25–44"}
             {topCountry ? `, based in ${topCountry.key}` : ", UK-based"}.
-            {" "}High intent around home buying, personal finance, and intentional adult life decisions.
+            {g90 && !g90.insufficient && ` Growing at +${g90.pct.toFixed(0)}% over the last 90 days.`}
           </div>
         </div>
 
@@ -859,6 +907,8 @@ export default function App() {
   const [igData, setIgData] = useState(null);
   const [insightsData, setInsightsData] = useState(null);
   const [demosData, setDemosData] = useState(null);
+
+  useEffect(() => { seedIfEmpty(); }, []);
 
   // Stable callbacks so AudienceSection's useEffect doesn't re-fire on every parent render
   const handleIg = useCallback(d => setIgData(d), []);
