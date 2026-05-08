@@ -5,6 +5,7 @@ import {
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { seedIfEmpty, saveSnapshot, computeGrowth } from "./lib/followerSnapshots.js";
+import { loadTags, setTag, computeCategoryBreakdown } from "./lib/postTags.js";
 
 // ── Google Fonts ─────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -42,14 +43,6 @@ const T_dealTypeColor = {
   Gifted: T.lifestyle,
 };
 
-// Estimated content category breakdown — still mock until post tagging is wired.
-const ESTIMATED_CATEGORIES = [
-  { name: "Real Estate",     pct: 38, color: T.navy },
-  { name: "Finance",         pct: 29, color: T.finance },
-  { name: "Community",       pct: 20, color: T.community },
-  { name: "Relationships",   pct: 13, color: T.relationships },
-];
-
 const INITIAL_DEALS = { inbound: [], negotiating: [], active: [], completed: [] };
 
 const EARNINGS = [
@@ -84,6 +77,25 @@ const INITIAL_POSTS = {};
 const fmt    = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 const fmtGBP = n => `£${Number(n).toLocaleString()}`;
 const fmtPct = n => `${(n).toFixed(1)}%`;
+
+// Pull a stable post identifier (the shortcode) out of either a permalink
+// or a raw shortcode. Returns null if the input is unrecognisable.
+function parseInstagramMediaId(input) {
+  if (!input) return null;
+  const trimmed = input.trim();
+  const m = trimmed.match(/instagram\.com\/(?:p|reel|tv)\/([A-Za-z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[A-Za-z0-9_-]+$/.test(trimmed)) return trimmed;
+  return null;
+}
+
+// Determine what to show in the post-type badge for the tagger.
+function postTypeLabel(post) {
+  if (post.media_product_type === "REELS") return "Reel";
+  if (post.media_type === "CAROUSEL_ALBUM") return "Carousel";
+  if (post.media_type === "VIDEO") return "Video";
+  return "Single Post";
+}
 
 function useStored(key, initial) {
   const [val, setVal] = useState(() => {
@@ -205,7 +217,7 @@ function SalmonBtn({ onClick, children, full, disabled, loading }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 1 — Audience Overview
 // ══════════════════════════════════════════════════════════════════════════════
-function AudienceSection({ onIgData, onInsightsData, onDemographicsData }) {
+function AudienceSection({ onIgData, onInsightsData, onDemographicsData, onOpenTagger }) {
   const [ig, setIg]         = useState(null);
   const [igErr, setIgErr]   = useState("");
   const [loading, setLoading] = useState(true);
@@ -303,23 +315,52 @@ function AudienceSection({ onIgData, onInsightsData, onDemographicsData }) {
       {/* Audience demographics (NEW) */}
       <DemographicsBlock demos={demos} demosLoad={demosLoad} demosErr={demosErr} />
 
-      {/* Category breakdown */}
+      {/* Category breakdown — driven by user-tagged posts */}
+      <CategoryBreakdownCard onOpenTagger={onOpenTagger} />
+    </div>
+  );
+}
+
+// ── Content Category Breakdown — real percentages from tagged posts ──────────
+function CategoryBreakdownCard({ onOpenTagger }) {
+  const breakdown = computeCategoryBreakdown(CATEGORIES);
+  const { totalTagged, percentages } = breakdown;
+
+  if (totalTagged === 0) {
+    return (
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginTop: 16 }}>
-        <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 20 }}>Content Category Breakdown</div>
-        {ESTIMATED_CATEGORIES.map(cat => (
-          <div key={cat.name} style={{ marginBottom: 18 }}>
+        <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 12 }}>Content Category Breakdown</div>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.textSoft, lineHeight: 1.55, marginBottom: 18 }}>
+          No posts tagged yet. Tag your last 50 posts in 5 minutes to see your real category split.
+        </div>
+        <SalmonBtn onClick={onOpenTagger}>Tag My Posts</SalmonBtn>
+      </div>
+    );
+  }
+
+  const lowSample = totalTagged < 5;
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginTop: 16 }}>
+      <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 20 }}>Content Category Breakdown</div>
+      {CATEGORIES.map(cat => {
+        const pct = percentages[cat] || 0;
+        const color = CATEGORY_COLORS[cat];
+        return (
+          <div key={cat} style={{ marginBottom: 18 }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text }}>{cat.name}</span>
-              <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: cat.color, fontWeight: 600 }}>{cat.pct}%</span>
+              <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text }}>{cat}</span>
+              <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color, fontWeight: 600 }}>{pct.toFixed(0)}%</span>
             </div>
             <div style={{ height: 4, borderRadius: 2, background: T.border }}>
-              <div style={{ height: "100%", width: `${cat.pct}%`, background: cat.color, borderRadius: 2, transition: "width 1s ease" }} />
+              <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2, transition: "width 1s ease" }} />
             </div>
           </div>
-        ))}
-        <div style={{ marginTop: 16, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, fontStyle: "italic" }}>
-          Note: category split is currently estimated — connect post tagging to make this live.
-        </div>
+        );
+      })}
+      <div style={{ marginTop: 16, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: lowSample ? T.warn : T.muted, fontStyle: "italic" }}>
+        {lowSample
+          ? `Based on ${totalTagged} tagged post${totalTagged === 1 ? "" : "s"} — tag a few more for a more accurate picture.`
+          : `Based on ${totalTagged} tagged posts.`}
       </div>
     </div>
   );
@@ -534,13 +575,18 @@ function DealsSection() {
 // ══════════════════════════════════════════════════════════════════════════════
 const STATUS_COLORS = { Posted: T.positive, Scheduled: T.salmon, Draft: T.muted };
 
-function CalendarSection() {
+function CalendarSection({ initialView = "calendar", onViewChange }) {
   const today = new Date();
+  const [view, setView]           = useState(initialView); // 'calendar' | 'tagger'
   const [viewYear, setViewYear]   = useState(today.getFullYear());
   const [viewMonth, setViewMonth] = useState(today.getMonth());
   const [posts, setPosts]         = useStored("bcs.posts.v1", INITIAL_POSTS);
   const [selected, setSel]        = useState(null);
-  const [form, setForm]           = useState({ category: "Finance", platform: "Reel", caption: "", status: "Draft" });
+  const [form, setForm]           = useState({ category: "Finance", platform: "Reel", caption: "", status: "Draft", instagramUrl: "" });
+
+  // If the parent wants to change which view is shown (e.g. Audience CTA), reflect that here.
+  useEffect(() => { setView(initialView); }, [initialView]);
+  useEffect(() => { if (onViewChange) onViewChange(view); }, [view, onViewChange]);
 
   const days     = new Date(viewYear, viewMonth + 1, 0).getDate();
   const firstDay = new Date(viewYear, viewMonth, 1).getDay();
@@ -550,10 +596,18 @@ function CalendarSection() {
 
   function openDay(day) {
     setSel(day);
-    setForm(monthPosts[day] || { category: "Finance", platform: "Reel", caption: "", status: "Draft" });
+    const existing = monthPosts[day];
+    setForm(existing
+      ? { instagramUrl: "", ...existing }
+      : { category: "Finance", platform: "Reel", caption: "", status: "Draft", instagramUrl: "" });
   }
   function save() {
-    if (form.caption) setPosts(p => ({ ...p, [monthKey]: { ...(p[monthKey] || {}), [selected]: form } }));
+    if (!form.caption) { setSel(null); return; }
+    const mediaId = parseInstagramMediaId(form.instagramUrl);
+    const entry = { ...form };
+    if (mediaId) entry.instagramMediaId = mediaId;
+    setPosts(p => ({ ...p, [monthKey]: { ...(p[monthKey] || {}), [selected]: entry } }));
+    if (mediaId && form.category) setTag(mediaId, form.category);
     setSel(null);
   }
   function remove() {
@@ -573,11 +627,16 @@ function CalendarSection() {
   }
   const cells = [...Array(firstDay).fill(null), ...Array.from({ length: days }, (_, i) => i + 1)];
 
+  if (view === "tagger") {
+    return <TagPostsView onDone={() => setView("calendar")} />;
+  }
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 }}>
         <SectionHeader title="Content Calendar" sub={`${monthName} — colour coded by category`} noMargin />
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button onClick={() => setView("tagger")} style={{ background: T.salmonDim, border: `1px solid ${T.salmon}55`, borderRadius: 6, padding: "6px 14px", color: T.salmon, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: 600, marginRight: 6 }}>Tag My Posts</button>
           <button onClick={() => shiftMonth(-1)} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>←</button>
           <button onClick={() => { setViewYear(today.getFullYear()); setViewMonth(today.getMonth()); }} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>Today</button>
           <button onClick={() => shiftMonth(1)} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>→</button>
@@ -626,12 +685,147 @@ function CalendarSection() {
         <Input label="Category"          value={form.category}  onChange={v => setForm(f => ({ ...f, category: v }))}  options={CATEGORIES} />
         <Input label="Format"            value={form.platform}  onChange={v => setForm(f => ({ ...f, platform: v }))}  options={["Reel","Carousel","Single Post","Story"]} />
         <Input label="Caption / Concept" value={form.caption}   onChange={v => setForm(f => ({ ...f, caption: v }))} />
+        <Input label="Instagram Post URL or ID" value={form.instagramUrl || ""} onChange={v => setForm(f => ({ ...f, instagramUrl: v }))} />
+        <div style={{ marginTop: -10, marginBottom: 16, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, fontStyle: "italic", lineHeight: 1.5 }}>
+          Optional — paste the Instagram URL of this post once published, so the dashboard can link your category to real performance data.
+        </div>
         <Input label="Status"            value={form.status}    onChange={v => setForm(f => ({ ...f, status: v }))}    options={["Draft","Scheduled","Posted"]} />
         <div style={{ display: "flex", gap: 10 }}>
           <SalmonBtn onClick={save} full>Save</SalmonBtn>
           {monthPosts[selected] && <button onClick={remove} style={{ flex: 1, background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>Remove</button>}
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// ── Tag My Posts — retroactive categoriser for the last 50 published posts ───
+function TagPostsView({ onDone }) {
+  const [posts, setPosts]   = useState([]);
+  const [loading, setLoad]  = useState(true);
+  const [err, setErr]       = useState("");
+  // Local mirror of localStorage so the UI updates without re-reading on every keystroke.
+  const [tagMap, setTagMap] = useState(() => {
+    const t = loadTags();
+    const m = {};
+    for (const [id, info] of Object.entries(t)) m[id] = info.category;
+    return m;
+  });
+  // Per-row "Saved" badge timer.
+  const [savedFlash, setSavedFlash] = useState({});
+
+  useEffect(() => {
+    fetch("/api/instagram-insights?limit=50")
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) throw new Error(data.error);
+        setPosts(data.posts || []);
+      })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoad(false));
+  }, []);
+
+  function pickCategory(post, category) {
+    // Use the shortcode parsed from the permalink as the stable identifier; fall
+    // back to the API id if the permalink is missing for some reason.
+    const id = parseInstagramMediaId(post.permalink) || post.id;
+    if (!id) return;
+    setTag(id, category || null);
+    setTagMap(prev => ({ ...prev, [id]: category || undefined }));
+    setSavedFlash(prev => ({ ...prev, [id]: Date.now() }));
+    setTimeout(() => {
+      setSavedFlash(prev => {
+        if (prev[id] && Date.now() - prev[id] >= 1000) {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        }
+        return prev;
+      });
+    }, 1100);
+  }
+
+  const taggedCount = posts.reduce((n, p) => {
+    const id = parseInstagramMediaId(p.permalink) || p.id;
+    return id && tagMap[id] ? n + 1 : n;
+  }, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
+        <SectionHeader
+          title="Tag My Posts"
+          sub={loading ? "Loading your last 50 posts…" : `${taggedCount} of ${posts.length} tagged`}
+          noMargin
+        />
+        <SalmonBtn onClick={onDone}>Done</SalmonBtn>
+      </div>
+
+      {err && (
+        <div style={{ background: T.card, border: `1px solid ${T.warn}55`, borderRadius: 8, padding: "16px 20px", marginBottom: 18, fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.warn }}>
+          ⚠ {err}
+        </div>
+      )}
+
+      {loading && !err && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "20px 24px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted }}>
+          Fetching posts from Instagram…
+        </div>
+      )}
+
+      {!loading && !err && posts.length === 0 && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "20px 24px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted }}>
+          No posts returned by Instagram.
+        </div>
+      )}
+
+      {!loading && !err && posts.length > 0 && (
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
+          {posts.map(post => {
+            const id = parseInstagramMediaId(post.permalink) || post.id;
+            const currentCat = tagMap[id] || "";
+            const thumb = post.thumbnail_url || post.media_url;
+            const dateLabel = post.timestamp
+              ? new Date(post.timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+              : "—";
+            const captionPreview = (post.caption || "").slice(0, 80) + ((post.caption || "").length > 80 ? "…" : "");
+            const showSaved = !!savedFlash[id];
+            return (
+              <div key={id} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", borderBottom: `1px solid ${T.border}`, minHeight: 80 }}>
+                {thumb
+                  ? <img src={thumb} alt="" style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 4, flexShrink: 0, background: T.bg }} />
+                  : <div style={{ width: 60, height: 60, borderRadius: 4, flexShrink: 0, background: T.bg, border: `1px solid ${T.border}` }} />}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <Tag color={T.salmon}>{postTypeLabel(post)}</Tag>
+                    <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>{dateLabel}</span>
+                  </div>
+                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {captionPreview || <span style={{ color: T.muted, fontStyle: "italic" }}>(no caption)</span>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                  {showSaved && (
+                    <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive, fontWeight: 600 }}>Saved</span>
+                  )}
+                  <select
+                    value={currentCat}
+                    onChange={e => pickCategory(post, e.target.value)}
+                    style={{
+                      background: T.bg, border: `1px solid ${currentCat ? CATEGORY_COLORS[currentCat] + "88" : T.border}`,
+                      borderRadius: 6, padding: "8px 10px", color: T.text,
+                      fontFamily: "'DM Sans',sans-serif", fontSize: 13, outline: "none", minWidth: 160,
+                    }}
+                  >
+                    <option value="">— Untagged —</option>
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -907,6 +1101,7 @@ export default function App() {
   const [igData, setIgData] = useState(null);
   const [insightsData, setInsightsData] = useState(null);
   const [demosData, setDemosData] = useState(null);
+  const [calendarView, setCalendarView] = useState("calendar");
 
   useEffect(() => { seedIfEmpty(); }, []);
 
@@ -914,11 +1109,13 @@ export default function App() {
   const handleIg = useCallback(d => setIgData(d), []);
   const handleInsights = useCallback(d => setInsightsData(d), []);
   const handleDemos = useCallback(d => setDemosData(d), []);
+  const openTagger = useCallback(() => { setCalendarView("tagger"); setActive("calendar"); }, []);
+  const handleCalendarView = useCallback(v => setCalendarView(v), []);
 
   const SECTIONS = {
-    audience: <AudienceSection onIgData={handleIg} onInsightsData={handleInsights} onDemographicsData={handleDemos} />,
+    audience: <AudienceSection onIgData={handleIg} onInsightsData={handleInsights} onDemographicsData={handleDemos} onOpenTagger={openTagger} />,
     deals:    <DealsSection />,
-    calendar: <CalendarSection />,
+    calendar: <CalendarSection initialView={calendarView} onViewChange={handleCalendarView} />,
     money:    <MoneySection igData={igData} />,
     mediakit: <MediaKitSection igData={igData} insightsData={insightsData} demosData={demosData} />,
   };

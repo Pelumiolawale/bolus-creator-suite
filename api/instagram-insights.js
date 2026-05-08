@@ -23,7 +23,7 @@ export default async function handler(req, res) {
   }
 
   // How many recent posts to analyse. Keep small to stay within rate limits.
-  const LIMIT = Math.min(parseInt(req.query.limit || "12", 10), 25);
+  const LIMIT = Math.min(parseInt(req.query.limit || "12", 10), 50);
 
   try {
     // 1. Get the recent media list (with permalink + thumbnail so we can render cards)
