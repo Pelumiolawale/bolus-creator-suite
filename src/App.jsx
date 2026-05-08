@@ -1419,6 +1419,7 @@ function WhatsWorkingSection({ insightsData, insightsLoad, insightsErr }) {
 // ══════════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [active, setActive] = useState("audience");
+  const [collapsed, setCollapsed] = useStored("bcs.sidebar.collapsed.v1", false);
   const [igData, setIgData] = useState(null);
   const [insightsData, setInsightsData] = useState(null);
   const [insightsLoad, setInsightsLoad] = useState(false);
@@ -1468,30 +1469,83 @@ export default function App() {
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
       `}</style>
 
-      <aside style={{ width: 220, flexShrink: 0, background: T.card, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", padding: "32px 0" }}>
-        <div style={{ padding: "0 24px 32px" }}>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: T.salmon, fontWeight: 700, letterSpacing: "0.02em" }}>Bolus Creator Suite</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 3, letterSpacing: "0.08em", textTransform: "uppercase" }}>Business Dashboard</div>
+      <aside style={{ width: collapsed ? 64 : 220, flexShrink: 0, background: T.card, borderRight: `1px solid ${T.border}`, display: "flex", flexDirection: "column", padding: "20px 0 32px", transition: "width 0.2s ease" }}>
+        {/* Header row: title (when expanded) + collapse toggle */}
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: collapsed ? "center" : "space-between", padding: collapsed ? "0 0 24px" : "12px 16px 24px 24px", gap: 8 }}>
+          {!collapsed && (
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: T.salmon, fontWeight: 700, letterSpacing: "0.02em", whiteSpace: "nowrap" }}>Bolus Creator Suite</div>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 3, letterSpacing: "0.08em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Business Dashboard</div>
+            </div>
+          )}
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            style={{
+              flexShrink: 0,
+              background: "transparent",
+              border: `1px solid ${T.border}`,
+              borderRadius: 6,
+              width: 28,
+              height: 28,
+              cursor: "pointer",
+              color: T.muted,
+              fontFamily: "'DM Sans',sans-serif",
+              fontSize: 14,
+              lineHeight: 1,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.color = T.salmon; e.currentTarget.style.borderColor = T.salmon + "55"; }}
+            onMouseLeave={e => { e.currentTarget.style.color = T.muted; e.currentTarget.style.borderColor = T.border; }}
+          >
+            {collapsed ? "»" : "«"}
+          </button>
         </div>
         <div style={{ height: 1, background: `linear-gradient(90deg, transparent, ${T.salmon}66, transparent)`, margin: "0 0 24px" }} />
         <nav style={{ flex: 1 }}>
           {NAV.map(item => {
             const on = active === item.id;
             return (
-              <button key={item.id} onClick={() => setActive(item.id)} style={{ display: "flex", alignItems: "center", gap: 12, width: "100%", padding: "12px 24px", background: on ? T.salmonDim : "transparent", border: "none", borderLeft: `3px solid ${on ? T.salmon : "transparent"}`, cursor: "pointer", transition: "all 0.15s" }}>
+              <button
+                key={item.id}
+                onClick={() => setActive(item.id)}
+                title={collapsed ? item.label : undefined}
+                aria-label={item.label}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  width: "100%",
+                  padding: collapsed ? "12px 0" : "12px 24px",
+                  justifyContent: collapsed ? "center" : "flex-start",
+                  background: on ? T.salmonDim : "transparent",
+                  border: "none",
+                  borderLeft: `3px solid ${on ? T.salmon : "transparent"}`,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+              >
                 <span style={{ fontSize: 14, color: on ? T.salmon : T.muted }}>{item.icon}</span>
-                <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: on ? 600 : 400, color: on ? T.text : T.textSoft }}>{item.label}</span>
+                {!collapsed && (
+                  <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, fontWeight: on ? 600 : 400, color: on ? T.text : T.textSoft, whiteSpace: "nowrap" }}>{item.label}</span>
+                )}
               </button>
             );
           })}
         </nav>
-        <div style={{ padding: "24px 20px 0", borderTop: `1px solid ${T.border}`, marginTop: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ padding: collapsed ? "20px 0 0" : "24px 20px 0", borderTop: `1px solid ${T.border}`, marginTop: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, justifyContent: collapsed ? "center" : "flex-start" }} title={collapsed ? `ByBolutife · ${followersLabel}` : undefined}>
             <div style={{ width: 36, height: 36, borderRadius: "50%", background: `linear-gradient(135deg, ${T.salmon}, ${T.salmonLight})`, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Playfair Display',serif", fontSize: 14, color: "#FFFFFF", fontWeight: 700, flexShrink: 0 }}>B</div>
-            <div>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, fontWeight: 500 }}>ByBolutife</div>
-              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted }}>{followersLabel}</div>
-            </div>
+            {!collapsed && (
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, fontWeight: 500, whiteSpace: "nowrap" }}>ByBolutife</div>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, whiteSpace: "nowrap" }}>{followersLabel}</div>
+              </div>
+            )}
           </div>
         </div>
       </aside>
