@@ -6,6 +6,7 @@ import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import { seedIfEmpty, saveSnapshot, computeGrowth } from "./lib/followerSnapshots.js";
 import { loadTags, setTag, computeCategoryBreakdown, runMigrations as runPostTagMigrations } from "./lib/postTags.js";
+import { formatPattern, dayPattern, timePattern, captionPattern, territoryPattern } from "./lib/patternAnalysis.js";
 
 // ── Google Fonts ─────────────────────────────────────────────────────────────
 const fontLink = document.createElement("link");
@@ -55,11 +56,12 @@ const CATEGORY_COLORS = {
 };
 
 const NAV = [
-  { id: "audience",   label: "Audience",     icon: "◈" },
-  { id: "deals",      label: "Brand Deals",  icon: "◆" },
-  { id: "calendar",   label: "Content",      icon: "▦" },
-  { id: "money",      label: "Monetisation", icon: "◎" },
-  { id: "mediakit",   label: "Media Kit",    icon: "✦" },
+  { id: "audience",   label: "Audience",       icon: "◈" },
+  { id: "deals",      label: "Brand Deals",    icon: "◆" },
+  { id: "calendar",   label: "Content",        icon: "▦" },
+  { id: "patterns",   label: "What's Working", icon: "✺" },
+  { id: "money",      label: "Monetisation",   icon: "◎" },
+  { id: "mediakit",   label: "Media Kit",      icon: "✦" },
 ];
 
 const INITIAL_POSTS = {};
@@ -246,7 +248,7 @@ function SalmonBtn({ onClick, children, full, disabled, loading }) {
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 1 — Audience Overview
 // ══════════════════════════════════════════════════════════════════════════════
-function AudienceSection({ onIgData, onInsightsData, onDemographicsData, onOpenTagger }) {
+function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsErr, onDemographicsData, onOpenTagger }) {
   const [ig, setIg]         = useState(null);
   const [igErr, setIgErr]   = useState("");
   const [loading, setLoading] = useState(true);
@@ -269,14 +271,21 @@ function AudienceSection({ onIgData, onInsightsData, onDemographicsData, onOpenT
       .catch(e => setIgErr(e.message))
       .finally(() => setLoading(false));
 
-    fetch("/api/instagram-insights?limit=12")
+    if (onInsightsLoad) onInsightsLoad(true);
+    fetch("/api/instagram-insights?limit=50")
       .then(r => r.json())
       .then(data => {
         if (data.error) throw new Error(data.error);
         setInsights(data); if (onInsightsData) onInsightsData(data);
       })
-      .catch(e => setInsightsErr(e.message))
-      .finally(() => setInsightsLoad(false));
+      .catch(e => {
+        setInsightsErr(e.message);
+        if (onInsightsErr) onInsightsErr(e.message);
+      })
+      .finally(() => {
+        setInsightsLoad(false);
+        if (onInsightsLoad) onInsightsLoad(false);
+      });
 
     fetch("/api/instagram-demographics")
       .then(r => r.json())
@@ -286,7 +295,7 @@ function AudienceSection({ onIgData, onInsightsData, onDemographicsData, onOpenT
       })
       .catch(e => setDemosErr(e.message))
       .finally(() => setDemosLoad(false));
-  }, [onIgData, onInsightsData, onDemographicsData]);
+  }, [onIgData, onInsightsData, onInsightsLoad, onInsightsErr, onDemographicsData]);
 
   const followers      = ig?.followers      ?? null;
   const mediaCount     = ig?.mediaCount     ?? "—";
@@ -1256,12 +1265,164 @@ function MediaKitSection({ igData, insightsData, demosData }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// SECTION 6 — What's Working (pattern analysis)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Small, plain status component to mirror AudienceSection's loading/error UX.
+function SectionStatus({ message, error }) {
+  const isError = !!error;
+  return (
+    <div style={{
+      background: T.card,
+      border: `1px solid ${isError ? T.warn + "55" : T.border}`,
+      borderRadius: 8,
+      padding: "20px 24px",
+      fontFamily: "'DM Sans',sans-serif",
+      fontSize: 13,
+      color: isError ? T.warn : T.muted,
+    }}>
+      {isError ? `⚠ ${error}` : message}
+    </div>
+  );
+}
+
+// Confidence pill — sage/positive for reliable, salmon for early, muted for low.
+function ConfidencePill({ confidence, label }) {
+  const palette = confidence === "reliable" ? T.positive
+                : confidence === "early"    ? T.salmon
+                : T.muted;
+  return <Tag color={palette}>{label}</Tag>;
+}
+
+// One pattern card — title, headline (or insufficient reason), and a horizontal
+// bar list. Bars are simple <div> width percentages; same visual language as
+// the Content Category Breakdown in AudienceSection.
+function PatternCard({ title, result }) {
+  return (
+    <div style={{
+      background: T.card,
+      border: `1px solid ${T.border}`,
+      borderRadius: 8,
+      padding: "24px 28px",
+      marginBottom: 16,
+    }}>
+      <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 14 }}>{title}</div>
+
+      {result.insufficient ? (
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted, fontStyle: "italic", lineHeight: 1.55 }}>
+          {result.reason}
+        </div>
+      ) : (
+        <PatternBody result={result} />
+      )}
+    </div>
+  );
+}
+
+function PatternBody({ result }) {
+  const { rows, headline, best, unit } = result;
+  const max = rows.reduce((m, r) => r.mean > m ? r.mean : m, 0);
+
+  function formatValue(mean) {
+    if (unit === "%") return `${mean.toFixed(1)}%`;
+    // Reach values are integers in the thousands — fmt() abbreviates as "12.3k".
+    return fmt(Math.round(mean));
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 18 }}>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.text, lineHeight: 1.5, flex: 1 }}>
+          {headline}
+        </div>
+        {best && <ConfidencePill confidence={best.confidence} label={best.label} />}
+      </div>
+
+      {rows.map((row, i) => {
+        const isTop = i === 0 && row.confidence !== "low";
+        const widthPct = max > 0 ? (row.mean / max) * 100 : 0;
+        const barColor = isTop ? T.salmon : T.borderStrong;
+        return (
+          <div key={row.name} style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8 }}>
+              <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text }}>{row.name}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: isTop ? T.salmon : T.textSoft, fontWeight: 600 }}>
+                  {formatValue(row.mean)}
+                </span>
+                <ConfidencePill confidence={row.confidence} label={`n=${row.n}`} />
+              </span>
+            </div>
+            <div style={{ height: 6, borderRadius: 3, background: T.border }}>
+              <div style={{ height: "100%", width: `${widthPct}%`, background: barColor, borderRadius: 3, transition: "width 1s ease" }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WhatsWorkingSection({ insightsData, insightsLoad, insightsErr }) {
+  const [localData, setLocalData] = useState(null);
+  const [localLoad, setLocalLoad] = useState(false);
+  const [localErr,  setLocalErr]  = useState("");
+
+  // Only fetch ourselves if the parent didn't already kick off (or finish) a fetch.
+  useEffect(() => {
+    if (insightsData || insightsLoad) return;
+    setLocalLoad(true);
+    fetch("/api/instagram-insights?limit=50")
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) throw new Error(d.error);
+        setLocalData(d);
+      })
+      .catch(e => setLocalErr(e.message))
+      .finally(() => setLocalLoad(false));
+  }, [insightsData, insightsLoad]);
+
+  const data    = insightsData || localData;
+  const loading = insightsLoad  || localLoad;
+  const err     = insightsErr   || localErr;
+
+  if (loading)        return <SectionStatus message="Analysing your posts…" />;
+  if (err)            return <SectionStatus error={err} />;
+  if (!data?.posts?.length) {
+    return <SectionStatus message="No posts to analyse yet — post a few and check back." />;
+  }
+
+  const posts = data.posts;
+  const fmtRes  = formatPattern(posts);
+  const days    = dayPattern(posts);
+  const time    = timePattern(posts);
+  const caps    = captionPattern(posts);
+  const terr    = territoryPattern(posts);
+
+  return (
+    <div>
+      <SectionHeader
+        title="What's Working"
+        sub={`Patterns from your last ${posts.length} posts. Updated live.`}
+      />
+      <PatternCard title="Best format"            result={fmtRes} />
+      <PatternCard title="Best day to post"       result={days} />
+      <PatternCard title="Best time to post"      result={time} />
+      <PatternCard title="Best caption length"    result={caps} />
+      <PatternCard title="Best content territory" result={terr} />
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [active, setActive] = useState("audience");
   const [igData, setIgData] = useState(null);
   const [insightsData, setInsightsData] = useState(null);
+  const [insightsLoad, setInsightsLoad] = useState(false);
+  const [insightsErr,  setInsightsErr]  = useState("");
   const [demosData, setDemosData] = useState(null);
   const [calendarView, setCalendarView] = useState("calendar");
 
@@ -1277,14 +1438,17 @@ export default function App() {
   // Stable callbacks so AudienceSection's useEffect doesn't re-fire on every parent render
   const handleIg = useCallback(d => setIgData(d), []);
   const handleInsights = useCallback(d => setInsightsData(d), []);
+  const handleInsightsLoad = useCallback(b => setInsightsLoad(b), []);
+  const handleInsightsErr  = useCallback(e => setInsightsErr(e), []);
   const handleDemos = useCallback(d => setDemosData(d), []);
   const openTagger = useCallback(() => { setCalendarView("tagger"); setActive("calendar"); }, []);
   const handleCalendarView = useCallback(v => setCalendarView(v), []);
 
   const SECTIONS = {
-    audience: <AudienceSection onIgData={handleIg} onInsightsData={handleInsights} onDemographicsData={handleDemos} onOpenTagger={openTagger} />,
+    audience: <AudienceSection onIgData={handleIg} onInsightsData={handleInsights} onInsightsLoad={handleInsightsLoad} onInsightsErr={handleInsightsErr} onDemographicsData={handleDemos} onOpenTagger={openTagger} />,
     deals:    <DealsSection />,
     calendar: <CalendarSection initialView={calendarView} onViewChange={handleCalendarView} />,
+    patterns: <WhatsWorkingSection insightsData={insightsData} insightsLoad={insightsLoad} insightsErr={insightsErr} />,
     money:    <MoneySection igData={igData} />,
     mediakit: <MediaKitSection igData={igData} insightsData={insightsData} demosData={demosData} />,
   };
