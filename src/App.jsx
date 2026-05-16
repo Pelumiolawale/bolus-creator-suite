@@ -1611,30 +1611,13 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           </div>
         )}
 
-        {/* 7. Brands I've Worked With — only renders when there's at least one completed deal */}
-        {topBrands.length > 0 && (
-          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>
-              Brands I've Worked With
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
-              {topBrands.map(b => (
-                <div key={b.id} style={{
-                  padding: "10px 12px",
-                  background: T.bg,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 5,
-                  textAlign: "center",
-                  fontFamily: "'Playfair Display',serif",
-                  fontSize: 14,
-                  color: T.text,
-                }}>
-                  {b.brand}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* 7. Brands I've Worked With — editable + drag-and-drop logos */}
+        <BrandsSection
+          brands={brands}
+          onAddDropped={addedBrands => setBrands(prev => [...prev, ...addedBrands])}
+          onOpenEditor={() => setEditing("brands")}
+        />
+
 
         {/* 8. Ways to Work Together — editable list. No rates (Pels prices per opportunity). */}
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "22px 26px", marginBottom: 24 }}>
@@ -1694,6 +1677,14 @@ function MediaKitSection({ igData, insightsData, demosData }) {
         initial={ways}
         kind="ways"
       />
+      <SectionEditor
+        open={editing === "brands"}
+        onClose={() => setEditing(null)}
+        onSave={draft => { setBrands(draft); setEditing(null); }}
+        title="Edit · Brands I've Worked With"
+        initial={brands}
+        kind="brands"
+      />
     </div>
   );
 }
@@ -1736,6 +1727,8 @@ function SectionEditor({ open, onClose, onSave, title, initial, kind }) {
 
   const cols = kind === "pillars"
     ? [{ key: "name", label: "Name", width: 180 }, { key: "desc", label: "Description", width: "flex" }]
+    : kind === "brands"
+    ? [{ key: "logoDataUrl", label: "Logo", type: "logo", width: 90 }, { key: "name", label: "Brand name", width: "flex" }]
     : [{ key: "strong", label: "Bold lead-in", width: 220 }, { key: "desc", label: "Description", width: "flex" }];
 
   function update(i, key, v) { setRows(rs => rs.map((r, j) => j === i ? { ...r, [key]: v } : r)); }
@@ -1777,12 +1770,16 @@ function SectionEditor({ open, onClose, onSave, title, initial, kind }) {
           <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {cols.map(c => (
               <div key={c.key} style={{ flex: c.width === "flex" ? 1 : `0 0 ${c.width}px`, minWidth: 0 }}>
-                <input
-                  value={r[c.key] || ""}
-                  onChange={e => update(i, c.key, e.target.value)}
-                  placeholder={c.label}
-                  style={inputStyle}
-                />
+                {c.type === "logo" ? (
+                  <LogoDropCell value={r[c.key]} onChange={v => update(i, c.key, v)} />
+                ) : (
+                  <input
+                    value={r[c.key] || ""}
+                    onChange={e => update(i, c.key, e.target.value)}
+                    placeholder={c.label}
+                    style={inputStyle}
+                  />
+                )}
               </div>
             ))}
             <button onClick={() => move(i, -1)} disabled={i === 0}              style={{ ...iconBtn, opacity: i === 0 ? 0.4 : 1 }} title="Move up">↑</button>
@@ -1799,6 +1796,137 @@ function SectionEditor({ open, onClose, onSave, title, initial, kind }) {
         <SalmonBtn onClick={save}>Save</SalmonBtn>
       </div>
     </Modal>
+  );
+}
+
+// Image file -> base64 with validation. 250KB cap keeps a ~10-logo kit under
+// localStorage's ~5 MB ceiling; rejecting non-images guards against surprises.
+const LOGO_MAX_BYTES = 250_000;
+function readLogoFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file.type?.startsWith("image/")) return reject(new Error(`${file.name} isn't an image`));
+    if (file.size > LOGO_MAX_BYTES)       return reject(new Error(`${file.name} is over ${Math.round(LOGO_MAX_BYTES / 1000)}KB`));
+    const fr = new FileReader();
+    fr.onload  = () => resolve(fr.result);
+    fr.onerror = () => reject(new Error(`Couldn't read ${file.name}`));
+    fr.readAsDataURL(file);
+  });
+}
+
+// In-modal logo cell: drop image or click to pick. Shows a thumb + clear.
+function LogoDropCell({ value, onChange }) {
+  const inputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function handleFiles(files) {
+    setErr("");
+    const file = files?.[0];
+    if (!file) return;
+    try { onChange(await readLogoFile(file)); }
+    catch (e) { setErr(e.message); }
+  }
+
+  return (
+    <div>
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
+        style={{
+          background: dragOver ? T.salmonDim : T.bg,
+          border: `1px ${dragOver ? "dashed" : "solid"} ${dragOver ? T.salmon : T.border}`,
+          borderRadius: 5, height: 56, display: "flex", alignItems: "center", justifyContent: "center",
+          cursor: "pointer", overflow: "hidden", position: "relative",
+        }}
+        title={value ? "Click to replace, or drop a new image" : "Click to upload logo or drop image here"}
+      >
+        {value
+          ? <img src={value} alt="logo" style={{ maxWidth: "90%", maxHeight: 44, objectFit: "contain" }} />
+          : <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, textAlign: "center" }}>Drop logo<br/>or click</span>}
+        {value && (
+          <button
+            onClick={e => { e.stopPropagation(); onChange(null); }}
+            title="Remove logo"
+            style={{ position: "absolute", top: 2, right: 2, background: T.card, border: `1px solid ${T.border}`, borderRadius: 3, color: T.warn, cursor: "pointer", padding: "0 4px", fontSize: 10, lineHeight: 1.4 }}
+          >✕</button>
+        )}
+      </div>
+      <input ref={inputRef} type="file" accept="image/*" hidden onChange={e => handleFiles(e.target.files)} />
+      {err && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.warn, marginTop: 4 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Section render: brand cards + page-level drag-and-drop zone for new logos.
+// Hides itself when empty AND no drop in progress (matches the original
+// "no completed deals -> no section" behaviour).
+function BrandsSection({ brands, onAddDropped, onOpenEditor }) {
+  const [dragOver, setDragOver] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function handleDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    setErr("");
+    const files = [...(e.dataTransfer?.files || [])];
+    const added = [];
+    for (const f of files) {
+      try {
+        const dataUrl = await readLogoFile(f);
+        added.push({ id: newRowId(), name: f.name.replace(/\.[^.]+$/, ""), logoDataUrl: dataUrl });
+      } catch (e2) {
+        setErr(e2.message);
+      }
+    }
+    if (added.length) onAddDropped(added);
+  }
+
+  if (brands.length === 0 && !dragOver) return null;
+
+  return (
+    <div
+      onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      style={{
+        background: dragOver ? T.salmonDim : T.card,
+        border: `1px ${dragOver ? "dashed" : "solid"} ${dragOver ? T.salmon : T.border}`,
+        borderRadius: 6, padding: "20px 24px", marginBottom: 24, transition: "background 0.15s, border-color 0.15s",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+          Brands I've Worked With
+        </div>
+        <EditLink onClick={onOpenEditor} />
+      </div>
+
+      {dragOver && (
+        <div data-pdf-hide="true" style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.salmon, fontStyle: "italic", marginBottom: 12, textAlign: "center" }}>
+          Drop logo to add a brand
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
+        {brands.map(b => (
+          <div key={b.id} style={{
+            padding: "10px 12px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 5,
+            textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", minHeight: 56,
+          }}>
+            {b.logoDataUrl
+              ? <img src={b.logoDataUrl} alt={b.name || "brand logo"} style={{ maxWidth: "100%", maxHeight: 44, objectFit: "contain" }} />
+              : <span style={{ fontFamily: "'Playfair Display',serif", fontSize: 14, color: T.text }}>{b.name}</span>}
+          </div>
+        ))}
+      </div>
+
+      <div data-pdf-hide="true" style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 10, fontStyle: "italic", textAlign: "center" }}>
+        Drag a logo image (≤{Math.round(LOGO_MAX_BYTES / 1000)}KB) anywhere on this card to add a brand.
+      </div>
+      {err && <div data-pdf-hide="true" style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.warn, marginTop: 6, textAlign: "center" }}>{err}</div>}
+    </div>
   );
 }
 
