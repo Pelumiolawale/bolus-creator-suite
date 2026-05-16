@@ -205,11 +205,11 @@ function SectionHeader({ title, sub, noMargin }) {
   );
 }
 
-function Modal({ open, onClose, title, children }) {
+function Modal({ open, onClose, title, children, width = 480 }) {
   if (!open) return null;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, background: "rgba(42,36,32,0.5)", display: "flex", alignItems: "center", justifyContent: "center", backdropFilter: "blur(2px)" }} onClick={onClose}>
-      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: 32, width: 480, maxWidth: "92vw", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(42,36,32,0.18)" }} onClick={e => e.stopPropagation()}>
+      <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 10, padding: 32, width, maxWidth: "92vw", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 12px 40px rgba(42,36,32,0.18)" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 20, color: T.text }}>{title}</div>
           <button onClick={onClose} style={{ background: "none", border: "none", color: T.muted, cursor: "pointer", fontSize: 20 }}>✕</button>
@@ -475,7 +475,9 @@ function CategoryBreakdownCard({ onOpenTagger, allowedMediaIds, windowDays }) {
 function TopPerformingPosts({ insights, insightsLoad, insightsErr, postsInWindow, windowDays }) {
   // Server already sorted by performance score; respect that ordering after filtering.
   const sourcePosts = postsInWindow ?? (insights?.posts || []);
-  const top = sourcePosts.slice(0, 4);
+  const top = sourcePosts.slice(0, 6);
+  const topFifteen = sourcePosts.slice(0, 15);
+  const [deepDive, setDeepDive] = useState(false);
   return (
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginBottom: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
@@ -486,7 +488,17 @@ function TopPerformingPosts({ insights, insightsLoad, insightsErr, postsInWindow
             {windowDays && ` · Last ${windowDays} days`}
           </div>
         </div>
-        {insights && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● {sourcePosts.length} of {insights.analysed} in window</span>}
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          {sourcePosts.length > 6 && (
+            <button
+              onClick={() => setDeepDive(true)}
+              style={{ background: "none", border: "none", color: T.salmon, fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0 }}
+            >
+              Deep dive: top {Math.min(15, sourcePosts.length)} →
+            </button>
+          )}
+          {insights && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● {sourcePosts.length} of {insights.analysed} in window</span>}
+        </div>
       </div>
 
       {insightsLoad && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted, padding: "20px 0" }}>Loading post insights…</div>}
@@ -502,34 +514,90 @@ function TopPerformingPosts({ insights, insightsLoad, insightsErr, postsInWindow
 
       {top.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 14 }}>
-          {top.map(p => {
-            const i = p.insights || {};
-            const captionPreview = (p.caption || "(no caption)").slice(0, 80) + (p.caption?.length > 80 ? "…" : "");
-            const date = p.timestamp ? new Date(p.timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
-            return (
-              <a key={p.id} href={p.permalink || "#"} target="_blank" rel="noopener noreferrer"
-                 style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: 14, textDecoration: "none", color: "inherit", display: "block", transition: "border-color 0.2s, transform 0.15s" }}
-                 onMouseEnter={e => { e.currentTarget.style.borderColor = T.salmon + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
-                 onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "none"; }}>
-                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                  <Tag color={T.salmon}>{p.media_product_type === "REELS" ? "Reel" : (p.media_type || "Post")}</Tag>
-                  <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>{date}</span>
-                </div>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.text, lineHeight: 1.5, minHeight: 50, marginBottom: 12 }}>
-                  {captionPreview}
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 6, fontFamily: "'DM Sans',sans-serif", fontSize: 11 }}>
-                  <div><span style={{ color: T.muted }}>Reach </span><span style={{ color: T.text, fontWeight: 600 }}>{i.reach != null ? fmt(i.reach) : "—"}</span></div>
-                  <div><span style={{ color: T.muted }}>Saves </span><span style={{ color: T.salmon, fontWeight: 600 }}>{i.saved != null ? fmt(i.saved) : "—"}</span></div>
-                  <div><span style={{ color: T.muted }}>Shares </span><span style={{ color: T.salmon, fontWeight: 600 }}>{i.shares != null ? fmt(i.shares) : "—"}</span></div>
-                  <div><span style={{ color: T.muted }}>Likes </span><span style={{ color: T.text, fontWeight: 600 }}>{i.likes != null ? fmt(i.likes) : (p.like_count != null ? fmt(p.like_count) : "—")}</span></div>
-                </div>
-              </a>
-            );
-          })}
+          {top.map(p => <TopPostCard key={p.id} post={p} />)}
         </div>
       )}
+
+      <Modal open={deepDive} onClose={() => setDeepDive(false)} title={`Top ${topFifteen.length} posts`} width={900}>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginBottom: 16 }}>
+          Same ranking — saves + shares weighted heaviest. Each card links to the post on Instagram.
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {topFifteen.map((p, idx) => <TopPostRow key={p.id} post={p} rank={idx + 1} />)}
+        </div>
+      </Modal>
     </div>
+  );
+}
+
+// One card in the 6-up grid. Same shape as before; extracted so the modal can
+// reuse the underlying data without duplicating link/hover styling.
+function TopPostCard({ post }) {
+  const i = post.insights || {};
+  const captionPreview = (post.caption || "(no caption)").slice(0, 80) + (post.caption?.length > 80 ? "…" : "");
+  const date = post.timestamp ? new Date(post.timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "";
+  return (
+    <a href={post.permalink || "#"} target="_blank" rel="noopener noreferrer"
+       style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: 14, textDecoration: "none", color: "inherit", display: "block", transition: "border-color 0.2s, transform 0.15s" }}
+       onMouseEnter={e => { e.currentTarget.style.borderColor = T.salmon + "70"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+       onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.transform = "none"; }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+        <Tag color={T.salmon}>{post.media_product_type === "REELS" ? "Reel" : (post.media_type || "Post")}</Tag>
+        <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>{date}</span>
+      </div>
+      <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.text, lineHeight: 1.5, minHeight: 50, marginBottom: 12 }}>
+        {captionPreview}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 6, fontFamily: "'DM Sans',sans-serif", fontSize: 11 }}>
+        <div><span style={{ color: T.muted }}>Reach </span><span style={{ color: T.text, fontWeight: 600 }}>{i.reach != null ? fmt(i.reach) : "—"}</span></div>
+        <div><span style={{ color: T.muted }}>Saves </span><span style={{ color: T.salmon, fontWeight: 600 }}>{i.saved != null ? fmt(i.saved) : "—"}</span></div>
+        <div><span style={{ color: T.muted }}>Shares </span><span style={{ color: T.salmon, fontWeight: 600 }}>{i.shares != null ? fmt(i.shares) : "—"}</span></div>
+        <div><span style={{ color: T.muted }}>Likes </span><span style={{ color: T.text, fontWeight: 600 }}>{i.likes != null ? fmt(i.likes) : (post.like_count != null ? fmt(post.like_count) : "—")}</span></div>
+      </div>
+    </a>
+  );
+}
+
+// Wider row used inside the deep-dive modal. Rank pill + thumbnail + full
+// caption + all five metrics inline so brand reviewers can scan a longer list.
+function TopPostRow({ post, rank }) {
+  const i = post.insights || {};
+  const thumb = post.thumbnail_url || post.media_url;
+  const date = post.timestamp ? new Date(post.timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  const caption = (post.caption || "").slice(0, 160) + ((post.caption || "").length > 160 ? "…" : "");
+  return (
+    <a href={post.permalink || "#"} target="_blank" rel="noopener noreferrer"
+       style={{ display: "flex", gap: 14, padding: "12px 14px", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, textDecoration: "none", color: "inherit", alignItems: "center", transition: "border-color 0.15s" }}
+       onMouseEnter={e => { e.currentTarget.style.borderColor = T.salmon + "80"; }}
+       onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; }}>
+      <div style={{ flexShrink: 0, fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.salmon, fontWeight: 700, width: 28, textAlign: "center" }}>{rank}</div>
+      {thumb
+        ? <img src={thumb} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 4, flexShrink: 0, background: T.bg }} />
+        : <div style={{ width: 56, height: 56, borderRadius: 4, flexShrink: 0, background: T.bg, border: `1px solid ${T.border}` }} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <Tag color={T.salmon}>{post.media_product_type === "REELS" ? "Reel" : (post.media_type || "Post")}</Tag>
+          <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>{date}</span>
+        </div>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.text, lineHeight: 1.45, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+          {caption || <span style={{ color: T.muted, fontStyle: "italic" }}>(no caption)</span>}
+        </div>
+      </div>
+      <div style={{ flexShrink: 0, display: "grid", gridTemplateColumns: "repeat(5, minmax(60px, auto))", gap: 14, fontFamily: "'DM Sans',sans-serif", fontSize: 11, textAlign: "right" }}>
+        {[
+          { label: "Reach",  val: i.reach  != null ? fmt(i.reach)  : "—", accent: false },
+          { label: "Views",  val: i.views  != null ? fmt(i.views)  : "—", accent: false },
+          { label: "Saves",  val: i.saved  != null ? fmt(i.saved)  : "—", accent: true  },
+          { label: "Shares", val: i.shares != null ? fmt(i.shares) : "—", accent: true  },
+          { label: "Likes",  val: i.likes  != null ? fmt(i.likes)  : (post.like_count != null ? fmt(post.like_count) : "—"), accent: false },
+        ].map(m => (
+          <div key={m.label}>
+            <div style={{ color: T.muted, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase" }}>{m.label}</div>
+            <div style={{ color: m.accent ? T.salmon : T.text, fontWeight: 600, fontSize: 13 }}>{m.val}</div>
+          </div>
+        ))}
+      </div>
+    </a>
   );
 }
 
