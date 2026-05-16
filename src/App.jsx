@@ -1558,7 +1558,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
         <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginBottom: 28, textAlign: "center" }}>
           {fmtBig(followers)} followers
           {" · "}
-          {engagementRate != null ? `${engagementRate}%` : "—"} engagement
+          {engagementRate != null ? `${engagementRate}% (last 20)` : "—"} engagement
           {" · "}
           {fmtBig(shares30d)} shares (30 days)
         </div>
@@ -2271,7 +2271,7 @@ export default function App() {
           <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted }}>{todayStr}</div>
           <div style={{ display: "flex", gap: 8 }}>
             {igData?.engagementRate && (
-              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 14px", fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.salmon, fontWeight: 600 }}>{igData.engagementRate}% engagement</div>
+              <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 14px", fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.salmon, fontWeight: 600 }}>{igData.engagementRate}% engagement <span style={{ color: T.muted, fontWeight: 400, marginLeft: 4 }}>· last 20 posts</span></div>
             )}
           </div>
         </div>
