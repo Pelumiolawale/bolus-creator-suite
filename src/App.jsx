@@ -1218,6 +1218,18 @@ function MediaKitSection({ igData, insightsData, demosData }) {
   const [deals] = useStored("bcs.deals.v1", INITIAL_DEALS);
   const completedDeals = deals.completed || [];
 
+  // Account-level reach with follow_type breakdown — drives the "Reach from
+  // non-followers" headline tile and the "Why Brands Work With Me" bullet.
+  // Per-post reach can't be broken down by follow_type (Graph API rejects it),
+  // so we hit the account-level endpoint instead.
+  const [accountReach, setAccountReach] = useState(null);
+  useEffect(() => {
+    fetch("/api/instagram-account-reach?days=90")
+      .then(r => r.json())
+      .then(setAccountReach)
+      .catch(() => setAccountReach({ error: "fetch failed" }));
+  }, []);
+
   // Top brands by total spend across completed deals — deduped by brand name so
   // a creator who's worked with the same brand twice gets one card with summed value.
   const byBrand = new Map();
@@ -1238,10 +1250,30 @@ function MediaKitSection({ igData, insightsData, demosData }) {
 
   const topPost = insightsData?.posts?.[0];
 
-  // Derive top-line audience facts for the brand-pitch summary line
-  const topCountry = demosData?.country?.[0];
-  const topAge     = demosData?.age?.[0];
-  // Normalise women % against (M+F) only, excluding "Undisclosed" — matches IG's app.
+  // Window aggregations from per-post insights. The Media Kit uses fixed
+  // windows (90d for reach/views, 30d for saves/shares) — these are
+  // independent of the Audience tab's global window selector.
+  const allPosts = insightsData?.posts || [];
+  function sumIn(days, key) {
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const w = allPosts.filter(p => p.timestamp && new Date(p.timestamp).getTime() >= cutoff);
+    let total = 0;
+    let seen = false;
+    for (const p of w) {
+      const v = p.insights?.[key];
+      if (v != null) { total += v; seen = true; }
+    }
+    return seen ? total : null;
+  }
+  const views90d  = sumIn(90, "views");
+  const saves30d  = sumIn(30, "saved");
+  const shares30d = sumIn(30, "shares");
+  const reach90d  = accountReach?.totalReach ?? null;
+  const nonFollowerPct = accountReach?.nonFollowerPct ?? null;
+
+  // Demographic derivations for the audience profile sentence + the existing
+  // women % calc. Everything traces back to /api/instagram-demographics — no
+  // hardcoded values in the JSX.
   const _genderFind = k => (demosData?.gender || []).find(g => g.key?.toUpperCase() === k)?.value || 0;
   const _womenCount = _genderFind("F");
   const _menCount   = _genderFind("M");
@@ -1249,15 +1281,24 @@ function MediaKitSection({ igData, insightsData, demosData }) {
     ? Math.round((_womenCount / (_womenCount + _menCount)) * 100)
     : null;
 
-  // Avg reach across the posts we have insights for — drives the media kit headline stat.
-  const reachPosts = (insightsData?.posts || []).filter(p => p.insights?.reach != null);
-  const avgReach = reachPosts.length
-    ? Math.round(reachPosts.reduce((s, p) => s + p.insights.reach, 0) / reachPosts.length)
-    : null;
+  // UK %: country bucket lookup — IG returns ISO country codes ("GB" for UK).
+  // Falls back through common variants so we don't miss the bucket if the API
+  // shifts conventions.
+  const countryTotal = (demosData?.country || []).reduce((s, c) => s + (c.value || 0), 0);
+  const ukEntry = (demosData?.country || []).find(c => ["GB", "UK", "United Kingdom"].includes(c.key));
+  const ukPct = ukEntry && countryTotal > 0 ? +(ukEntry.value / countryTotal * 100).toFixed(1) : null;
 
-  // Growth figures driven by the seeded snapshot store.
-  const g8mo = followers !== null ? computeGrowth(followers, 240) : null;
-  const g90  = followers !== null ? computeGrowth(followers, 90)  : null;
+  // 25–44 share = (25-34 bucket + 35-44 bucket) / total ages.
+  const ageTotal = (demosData?.age || []).reduce((s, a) => s + (a.value || 0), 0);
+  const ageFind = k => (demosData?.age || []).find(a => a.key === k)?.value || 0;
+  const age2544 = ageTotal > 0
+    ? +((ageFind("25-34") + ageFind("35-44")) / ageTotal * 100).toFixed(1)
+    : null;
+  // 1-decimal women% for the Audience Profile sentence (whole-number womenPct
+  // is still used elsewhere). Same source as womenPct; just different precision.
+  const womenPctDecimal = (_womenCount + _menCount) > 0
+    ? +(_womenCount / (_womenCount + _menCount) * 100).toFixed(1)
+    : null;
 
   async function exportPDF() {
     if (!kitRef.current) return;
@@ -1323,53 +1364,103 @@ function MediaKitSection({ igData, insightsData, demosData }) {
       {/* The exportable card — wrapped in a container with the cream background so the PDF matches */}
       <div ref={kitRef} style={{ background: T.bg, padding: 32, borderRadius: 8, border: `1px solid ${T.border}` }}>
 
-        {/* Header */}
+        {/* 1. Header */}
         <div style={{ borderBottom: `2px solid ${T.salmon}`, paddingBottom: 24, marginBottom: 28 }}>
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 36, color: T.text, fontWeight: 700, lineHeight: 1.1 }}>Bolu Faseun</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.salmon, marginTop: 6, letterSpacing: "0.04em" }}>@{username} · UK Home and Finance Creator</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.salmon, marginTop: 6, letterSpacing: "0.04em" }}>UK Home and Finance Creator</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 8 }}>
+            @{username} · hello@bybolutife.com
+          </div>
           <div style={{ fontFamily: "'Playfair Display',serif", fontStyle: "italic", fontSize: 16, color: T.textSoft, marginTop: 14, maxWidth: 540, lineHeight: 1.5 }}>
             Building a home and a life — one intentional decision at a time.
           </div>
         </div>
 
-        {/* Top stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 28 }}>
+        {/* 2. Headline metrics strip — leads with what brands actually buy.
+            Every number traces to a live API call; null shows "—" with no fake numbers. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 14 }}>
           {[
-            { label: "Followers",        val: followers !== null ? fmt(followers) : "—" },
-            { label: "Engagement Rate",  val: engagementRate !== null ? `${engagementRate}%` : "—" },
-            { label: "Growth (8 months)", val: !g8mo || g8mo.insufficient ? "—" : `+${g8mo.pct.toFixed(0)}%` },
-            { label: "Avg. Post Reach",  val: avgReach !== null ? fmt(avgReach) : "—" },
+            { label: "Accounts reached (90 days)",      val: reach90d  != null ? fmt(reach90d)   : "—",
+              note: reach90d  == null ? "Not returned by API" : null },
+            { label: "Views (90 days)",                  val: views90d  != null ? fmt(views90d)   : "—",
+              note: views90d  == null ? "Reels-only metric"  : null },
+            { label: "Saves (30 days)",                  val: saves30d  != null ? fmt(saves30d)   : "—",
+              note: saves30d  == null ? "No posts in window" : null },
+            { label: "Reach from non-followers",         val: nonFollowerPct != null ? `${nonFollowerPct}%` : "—",
+              note: nonFollowerPct == null ? "Account-level metric unavailable" : null },
           ].map(s => (
             <div key={s.label} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "16px 14px", textAlign: "center" }}>
               <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 22, color: T.salmon, fontWeight: 700 }}>{s.val}</div>
               <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 10, color: T.muted, marginTop: 4, letterSpacing: "0.06em", textTransform: "uppercase" }}>{s.label}</div>
+              {s.note && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 9, color: T.muted, marginTop: 4, fontStyle: "italic" }}>{s.note}</div>}
             </div>
           ))}
         </div>
-
-        {/* Audience snapshot — pitch-friendly summary line */}
-        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>The Audience</div>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 17, color: T.text, lineHeight: 1.55 }}>
-            {womenPct !== null ? `${womenPct}% women` : "Women-led audience"}
-            {topAge ? `, predominantly aged ${topAge.key}` : ", aged 25–44"}
-            {topCountry ? `, based in ${topCountry.key}` : ", UK-based"}.
-            {g90 && !g90.insufficient && ` Growing at +${g90.pct.toFixed(0)}% over the last 90 days.`}
-          </div>
+        {/* Secondary line: followers · engagement · shares 30d */}
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginBottom: 28, textAlign: "center" }}>
+          {followers != null ? fmt(followers) : "—"} followers
+          {" · "}
+          {engagementRate != null ? `${engagementRate}%` : "—"} engagement
+          {" · "}
+          {shares30d != null ? fmt(shares30d) : "—"} shares (30 days)
         </div>
 
-        {/* Demographics breakdown — only if data is present */}
-        {demosData && (demosData.age?.length || demosData.country?.length) && (
-          <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Demographics · Recent Followers</div>
+        {/* 3. Why Brands Work With Me */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "22px 26px", marginBottom: 24 }}>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.text, fontWeight: 700, marginBottom: 12 }}>Why Brands Work With Me</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.65, marginBottom: 14 }}>
+            I create high-trust content for women making intentional home, money and lifestyle decisions. My audience comes to me for honest, specific recommendations — not aspirational lifestyle content. That trust translates into discovery, saves and purchase intent.
+          </div>
+          <ul style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.65, paddingLeft: 18, margin: 0 }}>
+            {/* Bullet 1: live non-follower % when available; fall back to top-post-reach signal otherwise. */}
+            {nonFollowerPct != null ? (
+              <li><strong>{nonFollowerPct}% of my reach comes from people who don't follow me yet</strong> — my content travels.</li>
+            ) : topPost?.insights?.reach != null ? (
+              <li><strong>My top post in the last window reached {fmt(topPost.insights.reach)} accounts</strong> — discovery is the engine, not the follower count.</li>
+            ) : null}
+            <li><strong>Predominantly UK women aged 25–44</strong> — actively making home and financial decisions.</li>
+            <li><strong>Unscripted, talking-to-camera content is my strongest format</strong> — it converts viewers to followers and followers to action.</li>
+          </ul>
+        </div>
+
+        {/* 4. Audience profile — reframed copy with live numbers, gracefully omits clauses on missing data. */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Audience Profile</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, lineHeight: 1.6, marginBottom: 18 }}>
+            Predominantly{ukPct != null ? ` UK-based (${ukPct}%)` : " UK-based"}
+            {womenPctDecimal != null ? `, women (${womenPctDecimal}%)` : ", women"}
+            {age2544 != null ? `, aged 25–44 (${age2544}% of total followers)` : ", aged 25–44"}
+            . Engaged with home, property, money and intentional living content.
+          </div>
+
+          {/* Existing demographics breakdown chart — preserved below the new sentence */}
+          {demosData && (demosData.age?.length || demosData.country?.length) && (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 24 }}>
               <DemoBars title="Age" rows={demosData.age} />
               <DemoBars title="Top Cities" rows={demosData.city} />
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        {/* Top performing post */}
+        {/* 5. Content pillars — UNCHANGED per brief (positioning decisions handled separately) */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Brand Pillars</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 14 }}>
+            {[
+              { name: "Wealth",       desc: "Property, investing, career, earning power" },
+              { name: "Lifestyle",    desc: "Home, design, peace, environment" },
+              { name: "Relationships",desc: "Romantic alignment, friendships, standards" },
+              { name: "Identity",     desc: "Confidence, boundaries, intentional choices" },
+            ].map(p => (
+              <div key={p.name} style={{ borderLeft: `3px solid ${T.salmon}`, paddingLeft: 12 }}>
+                <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, color: T.text, fontWeight: 600 }}>{p.name}</div>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 2 }}>{p.desc}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 6. Top performing post */}
         {topPost && (
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
             <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Top Performing Post</div>
@@ -1392,25 +1483,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           </div>
         )}
 
-        {/* Brand pillars */}
-        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Brand Pillars</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 14 }}>
-            {[
-              { name: "Wealth",       desc: "Property, investing, career, earning power" },
-              { name: "Lifestyle",    desc: "Home, design, peace, environment" },
-              { name: "Relationships",desc: "Romantic alignment, friendships, standards" },
-              { name: "Identity",     desc: "Confidence, boundaries, intentional choices" },
-            ].map(p => (
-              <div key={p.name} style={{ borderLeft: `3px solid ${T.salmon}`, paddingLeft: 12 }}>
-                <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, color: T.text, fontWeight: 600 }}>{p.name}</div>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 2 }}>{p.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Brands I've Worked With — only renders when there's at least one completed deal */}
+        {/* 7. Brands I've Worked With — only renders when there's at least one completed deal */}
         {topBrands.length > 0 && (
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
             <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>
@@ -1435,9 +1508,27 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           </div>
         )}
 
-        {/* Footer */}
+        {/* 8. Ways to Work Together — verbatim per brief. No rates (Pels prices per opportunity). */}
+        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "22px 26px", marginBottom: 24 }}>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.text, fontWeight: 700, marginBottom: 14 }}>Ways to Work Together</div>
+          <ul style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.7, paddingLeft: 18, margin: 0 }}>
+            <li><strong>Brand partnerships</strong> — Reels, carousels, integrated storytelling</li>
+            <li><strong>UGC</strong> — content created for your channels</li>
+            <li><strong>Long-term ambassadorships</strong> — multi-month partnerships</li>
+            <li><strong>Product integration</strong> — featured naturally in home and lifestyle content</li>
+            <li><strong>Events and brand experiences</strong> — IRL activations, brand trips</li>
+            <li><strong>Affiliate and code-based partnerships</strong> — performance-led collaborations</li>
+          </ul>
+        </div>
+
+        {/* 9. Footer */}
         <div style={{ paddingTop: 18, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>
-          <div>hello@bybolutife.com · bybolutife.com</div>
+          <div>
+            hello@bybolutife.com · @{username}
+            <span style={{ marginLeft: 12, color: T.salmon }}>
+              Available for partnerships from {new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
+            </span>
+          </div>
           <div>Generated {new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</div>
         </div>
       </div>
