@@ -41,20 +41,29 @@ export default async function handler(req, res) {
     //    Different post types support different metric sets — we request a sensible
     //    union and tolerate per-post errors gracefully.
     const insightsPromises = posts.map(async post => {
-      // Pick metrics by media_product_type:
-      //   REELS -> reach, saves, shares, total_interactions, views, likes, comments
-      //   FEED  -> reach, saves, shares, total_interactions, likes, comments
+      // Pick metrics by media_product_type. `views` was historically Reels-only
+      // but IG has been unifying the metric across Feed/Carousel — we now try
+      // it for every post type and fall back to the no-views set if the API
+      // rejects with a "not supported" error for this media type.
       //   STORY -> reach, replies (we don't request these here; usually expired)
-      const isReel = post.media_product_type === "REELS";
-      const metrics = isReel
-        ? "reach,saved,shares,total_interactions,views,likes,comments"
-        : "reach,saved,shares,total_interactions,likes,comments";
+      const baseMetrics = "reach,saved,shares,total_interactions,likes,comments";
+      const fullMetrics = `${baseMetrics},views`;
+
+      async function fetchInsights(metricList) {
+        const r = await fetch(
+          `https://graph.instagram.com/${post.id}/insights?metric=${metricList}&access_token=${token}`
+        );
+        return r.json();
+      }
 
       try {
-        const r = await fetch(
-          `https://graph.instagram.com/${post.id}/insights?metric=${metrics}&access_token=${token}`
-        );
-        const j = await r.json();
+        let j = await fetchInsights(fullMetrics);
+        // If IG rejects the metric set (typically because `views` isn't allowed
+        // for this media type on this token), retry without views so the rest
+        // of the metrics still come through.
+        if (j.error && /views/i.test(j.error.message || "")) {
+          j = await fetchInsights(baseMetrics);
+        }
         if (j.error) return { ...post, insightsError: j.error.message };
 
         // Flatten the insight values into a single object: { reach: 1234, saved: 22, ... }
