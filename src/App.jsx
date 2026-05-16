@@ -1415,6 +1415,13 @@ function MediaKitSection({ igData, insightsData, demosData }) {
   async function exportPDF() {
     if (!kitRef.current) return;
     setExporting(true);
+
+    // Hide every [data-pdf-hide="true"] descendant so the PDF capture doesn't
+    // include Edit links or drag-and-drop hints. Restored in finally{} even if
+    // html2canvas throws, so the UI doesn't get stuck with controls missing.
+    const hidden = kitRef.current.querySelectorAll('[data-pdf-hide="true"]');
+    hidden.forEach(el => { el.dataset.prevDisplay = el.style.display; el.style.display = "none"; });
+
     try {
       // Render the kit to canvas at 2x for crisp print quality
       const canvas = await html2canvas(kitRef.current, {
@@ -1460,6 +1467,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
     } catch (err) {
       alert("Export failed: " + err.message);
     } finally {
+      hidden.forEach(el => { el.style.display = el.dataset.prevDisplay || ""; delete el.dataset.prevDisplay; });
       setExporting(false);
     }
   }
