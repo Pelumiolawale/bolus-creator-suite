@@ -344,7 +344,10 @@ function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsE
   const windowMs = windowDays * 24 * 60 * 60 * 1000;
   const cutoff = Date.now() - windowMs;
   const postsInWindow = allPosts.filter(p => p.timestamp && new Date(p.timestamp).getTime() >= cutoff);
-  const allowedIds = new Set(postsInWindow.map(p => p.id));
+  // Tags are saved keyed by the parsed permalink shortcode (with raw p.id as
+  // fallback) — see TagPostsView and CalendarSection.save. The Set has to use
+  // the same derivation or filtering returns no matches.
+  const allowedIds = new Set(postsInWindow.map(p => parseInstagramMediaId(p.permalink) || p.id));
   const dataLimited = postsInWindow.length < 12;
 
   // Engagement rate, recomputed client-side from the windowed posts so it
