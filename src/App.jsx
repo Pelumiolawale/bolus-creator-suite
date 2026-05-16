@@ -564,31 +564,20 @@ function DemographicsBlock({ demos, demosLoad, demosErr }) {
 
 // IG's app reports gender as a share of (Men + Women), excluding the "Undisclosed"
 // bucket the API returns as key "U". Including U in the denominator under-counted
-// Women by ~17pp vs the IG app (66% vs 83.4%). Render M/F normalised to each
-// other, and surface Undisclosed separately when it's material (>5%).
+// Women by ~17pp vs the IG app (66% vs 83.4%). Render M/F normalised to each other.
 function splitGender(gender) {
   const find = k => (gender || []).find(g => g.key?.toUpperCase() === k)?.value || 0;
-  const f = find("F"), m = find("M"), u = find("U");
-  const grand = f + m + u;
   const bars = [];
+  const f = find("F"), m = find("M");
   if (f) bars.push({ key: "Women", value: f });
   if (m) bars.push({ key: "Men", value: m });
-  return { bars, undisclosedPct: grand ? (u / grand) * 100 : 0 };
+  return bars;
 }
 
 function GenderBars({ gender }) {
-  const { bars, undisclosedPct } = splitGender(gender);
+  const bars = splitGender(gender);
   if (bars.length === 0) return null;
-  return (
-    <div>
-      <DemoBars title="Gender" rows={bars} />
-      {undisclosedPct > 5 && (
-        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>
-          Undisclosed: {undisclosedPct.toFixed(1)}% (IG users who haven't set a gender)
-        </div>
-      )}
-    </div>
-  );
+  return <DemoBars title="Gender" rows={bars} />;
 }
 
 function DemoBars({ title, rows }) {
