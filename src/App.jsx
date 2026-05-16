@@ -1044,6 +1044,20 @@ function EntriesList({ entries, onOpen }) {
 }
 
 // ── Tag My Posts — retroactive categoriser for the last 50 published posts ───
+// Two-segment toggle for newest/oldest sort. Active segment is salmon-filled;
+// inactive is muted. Reused via SortPill so we can drop the same control onto
+// other lists later without re-styling.
+function SortPill({ value, onChange }) {
+  const baseSeg = { background: "none", border: "none", padding: "5px 10px", cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 600, color: T.textSoft };
+  const activeSeg = { ...baseSeg, background: T.salmonDim, color: T.salmon };
+  return (
+    <div style={{ display: "inline-flex", border: `1px solid ${T.border}`, borderRadius: 6, overflow: "hidden" }} role="group" aria-label="Sort posts by date">
+      <button onClick={() => onChange("desc")} style={value === "desc" ? activeSeg : baseSeg} aria-pressed={value === "desc"}>↓ Newest first</button>
+      <button onClick={() => onChange("asc")}  style={value === "asc"  ? activeSeg : baseSeg} aria-pressed={value === "asc"}>↑ Oldest first</button>
+    </div>
+  );
+}
+
 function TagPostsView({ onDone }) {
   const [posts, setPosts]   = useState([]);
   const [loading, setLoad]  = useState(true);
@@ -1057,6 +1071,9 @@ function TagPostsView({ onDone }) {
   });
   // Per-row "Saved" badge timer.
   const [savedFlash, setSavedFlash] = useState({});
+  // Sort direction for the list — server returns posts ranked by performance
+  // score, but tagging is easier chronologically. Default newest-first.
+  const [sortOrder, setSortOrder] = useState("desc"); // "desc" | "asc"
 
   useEffect(() => {
     fetch("/api/instagram-insights?limit=50")
@@ -1094,6 +1111,17 @@ function TagPostsView({ onDone }) {
     return id && tagMap[id] ? n + 1 : n;
   }, 0);
 
+  // Posts without a timestamp sink to the end either direction so they don't
+  // jump around when the user flips the sort.
+  const sortedPosts = [...posts].sort((a, b) => {
+    const ta = a.timestamp ? new Date(a.timestamp).getTime() : null;
+    const tb = b.timestamp ? new Date(b.timestamp).getTime() : null;
+    if (ta == null && tb == null) return 0;
+    if (ta == null) return 1;
+    if (tb == null) return -1;
+    return sortOrder === "desc" ? tb - ta : ta - tb;
+  });
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 24 }}>
@@ -1102,7 +1130,10 @@ function TagPostsView({ onDone }) {
           sub={loading ? "Loading your last 50 posts…" : `${taggedCount} of ${posts.length} tagged`}
           noMargin
         />
-        <SalmonBtn onClick={onDone}>Done</SalmonBtn>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <SortPill value={sortOrder} onChange={setSortOrder} />
+          <SalmonBtn onClick={onDone}>Done</SalmonBtn>
+        </div>
       </div>
 
       {err && (
@@ -1125,7 +1156,7 @@ function TagPostsView({ onDone }) {
 
       {!loading && !err && posts.length > 0 && (
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden" }}>
-          {posts.map(post => {
+          {sortedPosts.map(post => {
             const id = parseInstagramMediaId(post.permalink) || post.id;
             const currentCat = tagMap[id] || "";
             const thumb = post.thumbnail_url || post.media_url;
