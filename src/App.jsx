@@ -1325,8 +1325,8 @@ function MediaKitSection({ igData, insightsData, demosData }) {
 
         {/* Header */}
         <div style={{ borderBottom: `2px solid ${T.salmon}`, paddingBottom: 24, marginBottom: 28 }}>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 36, color: T.text, fontWeight: 700, lineHeight: 1.1 }}>ByBolutife</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.salmon, marginTop: 6, letterSpacing: "0.04em" }}>@{username} · UK Home & Money Creator</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 36, color: T.text, fontWeight: 700, lineHeight: 1.1 }}>Bolu Faseun</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.salmon, marginTop: 6, letterSpacing: "0.04em" }}>@{username} · UK Home and Finance Creator</div>
           <div style={{ fontFamily: "'Playfair Display',serif", fontStyle: "italic", fontSize: 16, color: T.textSoft, marginTop: 14, maxWidth: 540, lineHeight: 1.5 }}>
             Building a home and a life — one intentional decision at a time.
           </div>
