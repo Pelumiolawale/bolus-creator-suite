@@ -1358,7 +1358,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
 
   const followers      = igData?.followers ?? null;
   const engagementRate = igData?.engagementRate ?? null;
-  const username       = igData?.username ?? "bybolutife";
+  const username       = igData?.username ?? "lifewithbolutife";
 
   const topPost = insightsData?.posts?.[0];
 
@@ -1489,7 +1489,11 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 36, color: T.text, fontWeight: 700, lineHeight: 1.1 }}>Bolu Faseun</div>
           <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: T.salmon, marginTop: 6, letterSpacing: "0.04em" }}>UK Home and Finance Creator</div>
           <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 8 }}>
-            @{username} · hello@bybolutife.com
+            <span style={{ color: T.muted, marginRight: 4 }}>Instagram</span>
+            @{username}
+            <span style={{ margin: "0 8px", color: T.muted }}>·</span>
+            <span style={{ color: T.muted, marginRight: 4 }}>Email</span>
+            hello@bybolutife.com
           </div>
           <div style={{ fontFamily: "'Playfair Display',serif", fontStyle: "italic", fontSize: 16, color: T.textSoft, marginTop: 14, maxWidth: 540, lineHeight: 1.5 }}>
             Building a home and a life — one intentional decision at a time.
@@ -1647,7 +1651,11 @@ function MediaKitSection({ igData, insightsData, demosData }) {
         {/* 9. Footer */}
         <div style={{ paddingTop: 18, borderTop: `1px solid ${T.border}`, display: "flex", justifyContent: "space-between", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted }}>
           <div>
-            hello@bybolutife.com · @{username}
+            <span style={{ color: T.muted, marginRight: 4 }}>Instagram</span>
+            @{username}
+            <span style={{ margin: "0 8px", color: T.muted }}>·</span>
+            <span style={{ color: T.muted, marginRight: 4 }}>Email</span>
+            hello@bybolutife.com
             <span style={{ marginLeft: 12, color: T.salmon }}>
               Available for partnerships from {new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
             </span>
