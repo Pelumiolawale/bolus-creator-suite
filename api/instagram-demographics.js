@@ -26,7 +26,7 @@ export default async function handler(req, res) {
     const breakdowns = ["age", "gender", "country", "city"];
     const requests = breakdowns.map(b =>
       fetch(
-        `https://graph.instagram.com/me/insights?metric=follower_demographics&period=lifetime&timeframe=last_90_days&breakdown=${b}&metric_type=total_value&access_token=${token}`
+        `https://graph.instagram.com/me/insights?metric=follower_demographics&period=lifetime&timeframe=last_30_days&breakdown=${b}&metric_type=total_value&access_token=${token}`
       ).then(r => r.json()).catch(err => ({ error: { message: err.message } }))
     );
 

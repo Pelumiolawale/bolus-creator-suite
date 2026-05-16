@@ -469,7 +469,7 @@ function DemographicsBlock({ demos, demosLoad, demosErr }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <div>
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text }}>Audience Demographics</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Last 90 days · the data brand pitches actually need</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Last 30 days · the data brand pitches actually need</div>
         </div>
         {hasData && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● Live</span>}
       </div>
@@ -485,9 +485,38 @@ function DemographicsBlock({ demos, demosLoad, demosErr }) {
       {hasData && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 24 }}>
           <DemoBars title="Age" rows={demos.age} />
-          <DemoBars title="Gender" rows={demos.gender} />
+          <GenderBars gender={demos.gender} />
           <DemoBars title="Top Countries" rows={demos.country} />
           <DemoBars title="Top Cities" rows={demos.city} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// IG's app reports gender as a share of (Men + Women), excluding the "Undisclosed"
+// bucket the API returns as key "U". Including U in the denominator under-counted
+// Women by ~17pp vs the IG app (66% vs 83.4%). Render M/F normalised to each
+// other, and surface Undisclosed separately when it's material (>5%).
+function splitGender(gender) {
+  const find = k => (gender || []).find(g => g.key?.toUpperCase() === k)?.value || 0;
+  const f = find("F"), m = find("M"), u = find("U");
+  const grand = f + m + u;
+  const bars = [];
+  if (f) bars.push({ key: "Women", value: f });
+  if (m) bars.push({ key: "Men", value: m });
+  return { bars, undisclosedPct: grand ? (u / grand) * 100 : 0 };
+}
+
+function GenderBars({ gender }) {
+  const { bars, undisclosedPct } = splitGender(gender);
+  if (bars.length === 0) return null;
+  return (
+    <div>
+      <DemoBars title="Gender" rows={bars} />
+      {undisclosedPct > 5 && (
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>
+          Undisclosed: {undisclosedPct.toFixed(1)}% (IG users who haven't set a gender)
         </div>
       )}
     </div>
@@ -1059,9 +1088,12 @@ function MediaKitSection({ igData, insightsData, demosData }) {
   // Derive top-line audience facts for the brand-pitch summary line
   const topCountry = demosData?.country?.[0];
   const topAge     = demosData?.age?.[0];
-  const genderTotal = (demosData?.gender || []).reduce((s, g) => s + g.value, 0);
-  const womenPct = genderTotal && demosData?.gender?.find(g => g.key.toUpperCase() === "F")
-    ? Math.round((demosData.gender.find(g => g.key.toUpperCase() === "F").value / genderTotal) * 100)
+  // Normalise women % against (M+F) only, excluding "Undisclosed" — matches IG's app.
+  const _genderFind = k => (demosData?.gender || []).find(g => g.key?.toUpperCase() === k)?.value || 0;
+  const _womenCount = _genderFind("F");
+  const _menCount   = _genderFind("M");
+  const womenPct = (_womenCount + _menCount) > 0
+    ? Math.round((_womenCount / (_womenCount + _menCount)) * 100)
     : null;
 
   // Avg reach across the posts we have insights for — drives the media kit headline stat.
@@ -1176,7 +1208,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
         {/* Demographics breakdown — only if data is present */}
         {demosData && (demosData.age?.length || demosData.country?.length) && (
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Demographics · Last 90 Days</div>
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Demographics · Last 30 Days</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 24 }}>
               <DemoBars title="Age" rows={demosData.age} />
               <DemoBars title="Top Cities" rows={demosData.city} />
