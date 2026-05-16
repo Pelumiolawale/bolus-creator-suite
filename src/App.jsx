@@ -78,6 +78,23 @@ const fmtBig = n => {
   return fmt(n);
 };
 
+// User-edited Media Kit copy may contain {nonFollowerPct} as a placeholder for
+// the live non-follower % from /api/instagram-account-reach. Substitute it at
+// render time. If the token is present but the live number isn't available,
+// return null so the caller can hide that bullet entirely (no "%" orphan).
+function fillNonFollowerToken(text, pct) {
+  if (!text) return "";
+  if (!text.includes("{nonFollowerPct}")) return text;
+  if (pct == null) return null;
+  return text.replaceAll("{nonFollowerPct}", String(pct));
+}
+
+// Stable-enough id generator for new editor rows. crypto.randomUUID isn't on
+// every browser yet (Safari versions etc.), so fall back to timestamp+random.
+const newRowId = () => (typeof crypto !== "undefined" && crypto.randomUUID
+  ? crypto.randomUUID()
+  : `r${Date.now()}${Math.random().toString(36).slice(2, 8)}`);
+
 // Calendar-store migrations. Lives next to the calendar's localStorage key so
 // a failure in postTag migrations doesn't block calendar migrations and vice
 // versa. Keep idempotent: each migration tag runs at most once per device.
@@ -1294,8 +1311,8 @@ function MediaKitSection({ igData, insightsData, demosData }) {
       .catch(() => setAccountReach({ error: "fetch failed" }));
   }, []);
 
-  // Top brands by total spend across completed deals — deduped by brand name so
-  // a creator who's worked with the same brand twice gets one card with summed value.
+  // Top brands by total spend across completed deals — used ONLY as a one-time
+  // seed for the editable Media Kit brands list (decoupled from Deals after that).
   const byBrand = new Map();
   for (const d of completedDeals) {
     const key = (d.brand || "").trim();
@@ -1307,6 +1324,37 @@ function MediaKitSection({ igData, insightsData, demosData }) {
   const topBrands = [...byBrand.values()]
     .sort((a, b) => b.totalValue - a.totalValue)
     .slice(0, 10);
+
+  // ─── Editable Media Kit sections ─────────────────────────────────────────────
+  // localStorage-backed. Seeds only fire on first load (key missing).
+  const [whyBrands, setWhyBrands] = useStored("bcs.mediaKit.whyBrands.v1", {
+    intro: "I create high-trust content for women making intentional home, money and lifestyle decisions. My audience comes to me for honest, specific recommendations — not aspirational lifestyle content. That trust translates into discovery, saves and purchase intent.",
+    bullets: [
+      { id: "wb-1", strong: "{nonFollowerPct}% of my reach comes from people who don't follow me yet", desc: "my content travels." },
+      { id: "wb-2", strong: "Predominantly UK women aged 25–44", desc: "actively making home and financial decisions." },
+      { id: "wb-3", strong: "Unscripted, talking-to-camera content is my strongest format", desc: "it converts viewers to followers and followers to action." },
+    ],
+  });
+  const [pillars, setPillars] = useStored("bcs.mediaKit.pillars.v1", [
+    { id: "p-1", name: "Wealth",        desc: "Property, investing, career, earning power" },
+    { id: "p-2", name: "Lifestyle",     desc: "Home, design, peace, environment" },
+    { id: "p-3", name: "Relationships", desc: "Romantic alignment, friendships, standards" },
+    { id: "p-4", name: "Identity",      desc: "Confidence, boundaries, intentional choices" },
+  ]);
+  const [brands, setBrands] = useStored("bcs.mediaKit.brands.v1",
+    topBrands.map(b => ({ id: `b-${b.id}`, name: b.brand, logoDataUrl: null }))
+  );
+  const [ways, setWays] = useStored("bcs.mediaKit.ways.v1", [
+    { id: "w-1", strong: "Brand partnerships",                 desc: "Reels, carousels, integrated storytelling" },
+    { id: "w-2", strong: "UGC",                                 desc: "content created for your channels" },
+    { id: "w-3", strong: "Long-term ambassadorships",           desc: "multi-month partnerships" },
+    { id: "w-4", strong: "Product integration",                 desc: "featured naturally in home and lifestyle content" },
+    { id: "w-5", strong: "Events and brand experiences",        desc: "IRL activations, brand trips" },
+    { id: "w-6", strong: "Affiliate and code-based partnerships", desc: "performance-led collaborations" },
+  ]);
+
+  // Which section's editor is open (null = none).
+  const [editing, setEditing] = useState(null);
 
   const followers      = igData?.followers ?? null;
   const engagementRate = igData?.engagementRate ?? null;
@@ -1469,23 +1517,37 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           {fmtBig(shares30d)} shares (30 days)
         </div>
 
-        {/* 3. Why Brands Work With Me */}
-        <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "22px 26px", marginBottom: 24 }}>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.text, fontWeight: 700, marginBottom: 12 }}>Why Brands Work With Me</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.65, marginBottom: 14 }}>
-            I create high-trust content for women making intentional home, money and lifestyle decisions. My audience comes to me for honest, specific recommendations — not aspirational lifestyle content. That trust translates into discovery, saves and purchase intent.
-          </div>
-          <ul style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.65, paddingLeft: 18, margin: 0 }}>
-            {/* Bullet 1: live non-follower % when available; fall back to top-post-reach signal otherwise. */}
-            {nonFollowerPct != null ? (
-              <li><strong>{nonFollowerPct}% of my reach comes from people who don't follow me yet</strong> — my content travels.</li>
-            ) : topPost?.insights?.reach != null ? (
-              <li><strong>My top post in the last window reached {fmtBig(topPost.insights.reach)} accounts</strong> — discovery is the engine, not the follower count.</li>
-            ) : null}
-            <li><strong>Predominantly UK women aged 25–44</strong> — actively making home and financial decisions.</li>
-            <li><strong>Unscripted, talking-to-camera content is my strongest format</strong> — it converts viewers to followers and followers to action.</li>
-          </ul>
-        </div>
+        {/* 3. Why Brands Work With Me — editable; bullets that reference {nonFollowerPct}
+            hide when the live number isn't available (no orphan "%"). */}
+        {(() => {
+          const visibleBullets = whyBrands.bullets
+            .map(b => {
+              const strong = fillNonFollowerToken(b.strong, nonFollowerPct);
+              const desc   = fillNonFollowerToken(b.desc,   nonFollowerPct);
+              return (strong === null || desc === null) ? null : { ...b, strong, desc };
+            })
+            .filter(Boolean);
+          return (
+            <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "22px 26px", marginBottom: 24 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+                <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.text, fontWeight: 700 }}>Why Brands Work With Me</div>
+                <EditLink onClick={() => setEditing("whyBrands")} />
+              </div>
+              {whyBrands.intro && (
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.65, marginBottom: 14 }}>
+                  {whyBrands.intro}
+                </div>
+              )}
+              {visibleBullets.length > 0 && (
+                <ul style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.65, paddingLeft: 18, margin: 0 }}>
+                  {visibleBullets.map(b => (
+                    <li key={b.id}><strong>{b.strong}</strong>{b.desc ? <> — {b.desc}</> : null}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })()}
 
         {/* 4. Audience profile — reframed copy with live numbers, gracefully omits clauses on missing data. */}
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
@@ -1506,22 +1568,24 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           )}
         </div>
 
-        {/* 5. Content pillars — UNCHANGED per brief (positioning decisions handled separately) */}
+        {/* 5. Brand pillars — editable list */}
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 12 }}>Brand Pillars</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 14 }}>
-            {[
-              { name: "Wealth",       desc: "Property, investing, career, earning power" },
-              { name: "Lifestyle",    desc: "Home, design, peace, environment" },
-              { name: "Relationships",desc: "Romantic alignment, friendships, standards" },
-              { name: "Identity",     desc: "Confidence, boundaries, intentional choices" },
-            ].map(p => (
-              <div key={p.name} style={{ borderLeft: `3px solid ${T.salmon}`, paddingLeft: 12 }}>
-                <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, color: T.text, fontWeight: 600 }}>{p.name}</div>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 2 }}>{p.desc}</div>
-              </div>
-            ))}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>Brand Pillars</div>
+            <EditLink onClick={() => setEditing("pillars")} />
           </div>
+          {pillars.length === 0 ? (
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted, fontStyle: "italic" }}>No pillars yet. Click Edit to add.</div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 14 }}>
+              {pillars.map(p => (
+                <div key={p.id} style={{ borderLeft: `3px solid ${T.salmon}`, paddingLeft: 12 }}>
+                  <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 15, color: T.text, fontWeight: 600 }}>{p.name}</div>
+                  <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginTop: 2 }}>{p.desc}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 6. Top performing post */}
@@ -1572,17 +1636,21 @@ function MediaKitSection({ igData, insightsData, demosData }) {
           </div>
         )}
 
-        {/* 8. Ways to Work Together — verbatim per brief. No rates (Pels prices per opportunity). */}
+        {/* 8. Ways to Work Together — editable list. No rates (Pels prices per opportunity). */}
         <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "22px 26px", marginBottom: 24 }}>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.text, fontWeight: 700, marginBottom: 14 }}>Ways to Work Together</div>
-          <ul style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.7, paddingLeft: 18, margin: 0 }}>
-            <li><strong>Brand partnerships</strong> — Reels, carousels, integrated storytelling</li>
-            <li><strong>UGC</strong> — content created for your channels</li>
-            <li><strong>Long-term ambassadorships</strong> — multi-month partnerships</li>
-            <li><strong>Product integration</strong> — featured naturally in home and lifestyle content</li>
-            <li><strong>Events and brand experiences</strong> — IRL activations, brand trips</li>
-            <li><strong>Affiliate and code-based partnerships</strong> — performance-led collaborations</li>
-          </ul>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+            <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.text, fontWeight: 700 }}>Ways to Work Together</div>
+            <EditLink onClick={() => setEditing("ways")} />
+          </div>
+          {ways.length === 0 ? (
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted, fontStyle: "italic" }}>No options yet. Click Edit to add.</div>
+          ) : (
+            <ul style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, lineHeight: 1.7, paddingLeft: 18, margin: 0 }}>
+              {ways.map(w => (
+                <li key={w.id}><strong>{w.strong}</strong>{w.desc ? <> — {w.desc}</> : null}</li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* 9. Footer */}
@@ -1600,7 +1668,137 @@ function MediaKitSection({ igData, insightsData, demosData }) {
       <div style={{ marginTop: 14, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, fontStyle: "italic" }}>
         The PDF will mirror this layout exactly. Values that show "—" indicate Instagram hasn't returned data yet (or the metric isn't available for the connected account type).
       </div>
+
+      {/* ─── Editor modals ───────────────────────────────────────────────────── */}
+      <SectionEditor
+        open={editing === "whyBrands"}
+        onClose={() => setEditing(null)}
+        onSave={draft => { setWhyBrands(draft); setEditing(null); }}
+        title="Edit · Why Brands Work With Me"
+        initial={whyBrands}
+        kind="whyBrands"
+      />
+      <SectionEditor
+        open={editing === "pillars"}
+        onClose={() => setEditing(null)}
+        onSave={draft => { setPillars(draft); setEditing(null); }}
+        title="Edit · Brand Pillars"
+        initial={pillars}
+        kind="pillars"
+      />
+      <SectionEditor
+        open={editing === "ways"}
+        onClose={() => setEditing(null)}
+        onSave={draft => { setWays(draft); setEditing(null); }}
+        title="Edit · Ways to Work Together"
+        initial={ways}
+        kind="ways"
+      />
     </div>
+  );
+}
+
+// Small salmon link rendered in each section header. Carries data-pdf-hide so
+// the PDF export pass hides it before html2canvas runs.
+function EditLink({ onClick }) {
+  return (
+    <button
+      data-pdf-hide="true"
+      onClick={onClick}
+      style={{ background: "none", border: "none", color: T.salmon, fontFamily: "'DM Sans',sans-serif", fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0, letterSpacing: "0.04em" }}
+    >
+      Edit
+    </button>
+  );
+}
+
+// Shared editor modal for the four editable Media Kit sections. Maintains a
+// local draft of the rows so Cancel discards without writing to localStorage.
+// `kind` picks the row shape: "pillars" => {name, desc}, "ways" => {strong,desc},
+// "whyBrands" => {intro, bullets:[{strong,desc}]}.
+function SectionEditor({ open, onClose, onSave, title, initial, kind }) {
+  // For whyBrands the "rows" are the bullets; the intro is a sibling field.
+  const isWhy = kind === "whyBrands";
+  const [intro, setIntro] = useState("");
+  const [rows, setRows] = useState([]);
+
+  // Sync draft state when the modal opens. Keep stale state when closed so a
+  // re-open after Cancel still resets cleanly (driven by `open` flip).
+  useEffect(() => {
+    if (!open) return;
+    if (isWhy) {
+      setIntro(initial?.intro || "");
+      setRows((initial?.bullets || []).map(r => ({ ...r })));
+    } else {
+      setRows((initial || []).map(r => ({ ...r })));
+    }
+  }, [open, initial, isWhy]);
+
+  const cols = kind === "pillars"
+    ? [{ key: "name", label: "Name", width: 180 }, { key: "desc", label: "Description", width: "flex" }]
+    : [{ key: "strong", label: "Bold lead-in", width: 220 }, { key: "desc", label: "Description", width: "flex" }];
+
+  function update(i, key, v) { setRows(rs => rs.map((r, j) => j === i ? { ...r, [key]: v } : r)); }
+  function move(i, delta)    { setRows(rs => { const out = [...rs]; const j = i + delta; if (j < 0 || j >= out.length) return rs; [out[i], out[j]] = [out[j], out[i]]; return out; }); }
+  function remove(i)         { setRows(rs => rs.filter((_, j) => j !== i)); }
+  function add()             {
+    const blank = Object.fromEntries(cols.map(c => [c.key, ""]));
+    setRows(rs => [...rs, { id: newRowId(), ...blank }]);
+  }
+  function save() {
+    if (isWhy) onSave({ intro: intro.trim(), bullets: rows });
+    else onSave(rows);
+  }
+
+  const inputStyle = { width: "100%", background: T.bg, border: `1px solid ${T.border}`, borderRadius: 5, padding: "8px 10px", color: T.text, fontFamily: "'DM Sans',sans-serif", fontSize: 13, outline: "none", boxSizing: "border-box" };
+  const iconBtn    = { background: T.bg, border: `1px solid ${T.border}`, borderRadius: 4, color: T.textSoft, cursor: "pointer", padding: "4px 8px", fontFamily: "'DM Sans',sans-serif", fontSize: 12 };
+
+  return (
+    <Modal open={open} onClose={onClose} title={title} width={780}>
+      {isWhy && (
+        <div style={{ marginBottom: 18 }}>
+          <label style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>Intro paragraph</label>
+          <textarea value={intro} onChange={e => setIntro(e.target.value)} rows={4} style={{ ...inputStyle, resize: "vertical", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.5 }} />
+        </div>
+      )}
+
+      <div style={{ display: "block", fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+        {isWhy ? "Bullets" : "Items"}
+        {isWhy && <span style={{ marginLeft: 8, fontStyle: "italic", textTransform: "none", letterSpacing: 0 }}>
+          Use <code>{"{nonFollowerPct}"}</code> as a placeholder for the live non-follower %.
+        </span>}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+        {rows.length === 0 && (
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted, fontStyle: "italic" }}>No items yet — click + Add below.</div>
+        )}
+        {rows.map((r, i) => (
+          <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {cols.map(c => (
+              <div key={c.key} style={{ flex: c.width === "flex" ? 1 : `0 0 ${c.width}px`, minWidth: 0 }}>
+                <input
+                  value={r[c.key] || ""}
+                  onChange={e => update(i, c.key, e.target.value)}
+                  placeholder={c.label}
+                  style={inputStyle}
+                />
+              </div>
+            ))}
+            <button onClick={() => move(i, -1)} disabled={i === 0}              style={{ ...iconBtn, opacity: i === 0 ? 0.4 : 1 }} title="Move up">↑</button>
+            <button onClick={() => move(i,  1)} disabled={i === rows.length - 1} style={{ ...iconBtn, opacity: i === rows.length - 1 ? 0.4 : 1 }} title="Move down">↓</button>
+            <button onClick={() => remove(i)} style={{ ...iconBtn, color: T.warn }} title="Remove">✕</button>
+          </div>
+        ))}
+      </div>
+
+      <button onClick={add} style={{ background: T.salmonDim, border: `1px solid ${T.salmon}55`, borderRadius: 6, padding: "8px 14px", color: T.salmon, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600, marginBottom: 20 }}>+ Add</button>
+
+      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+        <button onClick={onClose} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: "8px 18px", color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>Cancel</button>
+        <SalmonBtn onClick={save}>Save</SalmonBtn>
+      </div>
+    </Modal>
   );
 }
 
