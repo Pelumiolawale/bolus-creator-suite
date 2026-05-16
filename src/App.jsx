@@ -809,6 +809,34 @@ function CalendarSection({ initialView = "calendar", onViewChange }) {
     return <TagPostsView onDone={() => setView("calendar")} />;
   }
 
+  // Flatten posts[monthKey][day] into a chronological list across all months.
+  // Sort: drafts (no scheduled/posted date intent) at top, then dated entries
+  // newest-first (so a post next month sits above one today, which sits above
+  // one last week). Picked drafts-on-top per the brief's recommendation.
+  const flatEntries = [];
+  for (const [mKey, daysMap] of Object.entries(posts)) {
+    const [yStr, mStr] = mKey.split("-");
+    const y = parseInt(yStr, 10);
+    const m = parseInt(mStr, 10);
+    for (const [dStr, entry] of Object.entries(daysMap || {})) {
+      const d = parseInt(dStr, 10);
+      flatEntries.push({ ...entry, _year: y, _month: m, _day: d, _date: new Date(y, m, d) });
+    }
+  }
+  flatEntries.sort((a, b) => {
+    const aDraft = a.status === "Draft";
+    const bDraft = b.status === "Draft";
+    if (aDraft !== bDraft) return aDraft ? -1 : 1;
+    return b._date - a._date;
+  });
+
+  function openEntryFromList(entry) {
+    setViewYear(entry._year);
+    setViewMonth(entry._month);
+    setSel(entry._day);
+    setForm({ instagramUrl: "", ...entry });
+  }
+
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 18 }}>
@@ -820,6 +848,10 @@ function CalendarSection({ initialView = "calendar", onViewChange }) {
           <button onClick={() => shiftMonth(1)} style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "6px 12px", color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>→</button>
         </div>
       </div>
+
+      {flatEntries.length > 0 && (
+        <EntriesList entries={flatEntries} onOpen={openEntryFromList} />
+      )}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         {Object.entries(CATEGORY_COLORS).map(([k, v]) => (
           <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -873,6 +905,59 @@ function CalendarSection({ initialView = "calendar", onViewChange }) {
           {monthPosts[selected] && <button onClick={remove} style={{ flex: 1, background: "none", border: `1px solid ${T.border}`, borderRadius: 6, color: T.textSoft, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>Remove</button>}
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// ── Chronological list of all calendar entries (sits above the month grid) ──
+function EntriesList({ entries, onOpen }) {
+  const [expanded, setExpanded] = useState(false);
+  const COLLAPSED = 6;
+  const visible = expanded ? entries : entries.slice(0, COLLAPSED);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+
+  return (
+    <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "16px 20px", marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase" }}>
+          All Entries · {entries.length}
+        </div>
+        {entries.length > COLLAPSED && (
+          <button onClick={() => setExpanded(e => !e)} style={{ background: "none", border: "none", color: T.salmon, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", fontSize: 12, fontWeight: 600 }}>
+            {expanded ? "Show less" : `Show all (${entries.length})`}
+          </button>
+        )}
+      </div>
+      <div>
+        {visible.map((e, i) => {
+          const isDraft = e.status === "Draft";
+          const isFuture = e._date > today;
+          const dateLabel = e._date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+          const color = CATEGORY_COLORS[e.category] || T.salmon;
+          return (
+            <div
+              key={`${e._year}-${e._month}-${e._day}-${i}`}
+              onClick={() => onOpen(e)}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 10px", borderRadius: 6, cursor: "pointer", marginBottom: 2, transition: "background 0.15s" }}
+              onMouseEnter={ev => { ev.currentTarget.style.background = T.bg; }}
+              onMouseLeave={ev => { ev.currentTarget.style.background = "transparent"; }}
+            >
+              <div style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, minWidth: 100, flexShrink: 0 }}>
+                {isDraft ? "Draft" : dateLabel}
+                {isFuture && !isDraft && <span style={{ marginLeft: 6, color: T.salmon, fontWeight: 600 }}>· upcoming</span>}
+              </div>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.muted, minWidth: 90, flexShrink: 0 }}>
+                {e.category} · {e.platform}
+              </div>
+              <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                {e.caption || <span style={{ color: T.muted, fontStyle: "italic" }}>(no caption)</span>}
+              </div>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: STATUS_COLORS[e.status] || T.muted, flexShrink: 0 }} title={e.status} />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
