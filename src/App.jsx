@@ -70,6 +70,13 @@ const INITIAL_POSTS = {};
 const fmt    = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 const fmtGBP = n => `£${Number(n).toLocaleString()}`;
 const fmtPct = n => `${(n).toFixed(1)}%`;
+// Big-number format for the Media Kit. Brand-facing copy reads "1.2 million"
+// better than "1,211.9k" — fmt stays the default for the dashboard tabs.
+const fmtBig = n => {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} million`;
+  return fmt(n);
+};
 
 // Calendar-store migrations. Lives next to the calendar's localStorage key so
 // a failure in postTag migrations doesn't block calendar migrations and vice
@@ -1369,11 +1376,11 @@ function MediaKitSection({ igData, insightsData, demosData }) {
             Every number traces to a live API call; null shows "—" with no fake numbers. */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 14, marginBottom: 14 }}>
           {[
-            { label: "Accounts reached (90 days)",      val: reach90d  != null ? fmt(reach90d)   : "—",
+            { label: "Accounts reached (90 days)",      val: fmtBig(reach90d),
               note: reach90d  == null ? "Not returned by API" : null },
-            { label: "Views (90 days)",                  val: views90d  != null ? fmt(views90d)   : "—",
+            { label: "Views (90 days)",                  val: fmtBig(views90d),
               note: views90d  == null ? "Reels-only metric"  : null },
-            { label: "Saves (30 days)",                  val: saves30d  != null ? fmt(saves30d)   : "—",
+            { label: "Saves (30 days)",                  val: fmtBig(saves30d),
               note: saves30d  == null ? "No posts in window" : null },
             { label: "Reach from non-followers",         val: nonFollowerPct != null ? `${nonFollowerPct}%` : "—",
               note: nonFollowerPct == null ? "Account-level metric unavailable" : null },
@@ -1387,11 +1394,11 @@ function MediaKitSection({ igData, insightsData, demosData }) {
         </div>
         {/* Secondary line: followers · engagement · shares 30d */}
         <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: T.textSoft, marginBottom: 28, textAlign: "center" }}>
-          {followers != null ? fmt(followers) : "—"} followers
+          {fmtBig(followers)} followers
           {" · "}
           {engagementRate != null ? `${engagementRate}%` : "—"} engagement
           {" · "}
-          {shares30d != null ? fmt(shares30d) : "—"} shares (30 days)
+          {fmtBig(shares30d)} shares (30 days)
         </div>
 
         {/* 3. Why Brands Work With Me */}
@@ -1405,7 +1412,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
             {nonFollowerPct != null ? (
               <li><strong>{nonFollowerPct}% of my reach comes from people who don't follow me yet</strong> — my content travels.</li>
             ) : topPost?.insights?.reach != null ? (
-              <li><strong>My top post in the last window reached {fmt(topPost.insights.reach)} accounts</strong> — discovery is the engine, not the follower count.</li>
+              <li><strong>My top post in the last window reached {fmtBig(topPost.insights.reach)} accounts</strong> — discovery is the engine, not the follower count.</li>
             ) : null}
             <li><strong>Predominantly UK women aged 25–44</strong> — actively making home and financial decisions.</li>
             <li><strong>Unscripted, talking-to-camera content is my strongest format</strong> — it converts viewers to followers and followers to action.</li>
@@ -1458,10 +1465,10 @@ function MediaKitSection({ igData, insightsData, demosData }) {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12 }}>
               {[
-                { label: "Reach",  val: topPost.insights?.reach != null ? fmt(topPost.insights.reach) : "—" },
-                { label: "Saves",  val: topPost.insights?.saved != null ? fmt(topPost.insights.saved) : "—" },
-                { label: "Shares", val: topPost.insights?.shares != null ? fmt(topPost.insights.shares) : "—" },
-                { label: "Likes",  val: topPost.insights?.likes != null ? fmt(topPost.insights.likes) : (topPost.like_count != null ? fmt(topPost.like_count) : "—") },
+                { label: "Reach",  val: fmtBig(topPost.insights?.reach) },
+                { label: "Saves",  val: fmtBig(topPost.insights?.saved) },
+                { label: "Shares", val: fmtBig(topPost.insights?.shares) },
+                { label: "Likes",  val: fmtBig(topPost.insights?.likes ?? topPost.like_count) },
               ].map(s => (
                 <div key={s.label} style={{ textAlign: "center" }}>
                   <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 18, color: T.salmon, fontWeight: 700 }}>{s.val}</div>
