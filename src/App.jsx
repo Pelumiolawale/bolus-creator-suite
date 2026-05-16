@@ -1345,6 +1345,18 @@ function MediaKitSection({ igData, insightsData, demosData }) {
       .catch(() => setAccountReach({ error: "fetch failed" }));
   }, []);
 
+  // Account-level views over the trailing 90 days. Must be account-level, not
+  // a sum of per-post lifetime views — older posts that are still accruing
+  // plays contribute to the window total, and the per-post sum misses them.
+  // IG's app reports this exact figure on the Insights tab.
+  const [accountViews, setAccountViews] = useState(null);
+  useEffect(() => {
+    fetch("/api/instagram-account-views?days=90")
+      .then(r => r.json())
+      .then(setAccountViews)
+      .catch(() => setAccountViews({ error: "fetch failed" }));
+  }, []);
+
   // Top brands by total spend across completed deals — used ONLY as a one-time
   // seed for the editable Media Kit brands list (decoupled from Deals after that).
   const byBrand = new Map();
@@ -1411,7 +1423,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
     }
     return seen ? total : null;
   }
-  const views90d  = sumIn(90, "views");
+  const views90d  = accountViews?.totalViews ?? null;
   const saves30d  = sumIn(30, "saved");
   const shares30d = sumIn(30, "shares");
   const reach90d  = accountReach?.totalReach ?? null;
@@ -1541,7 +1553,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
             { label: "Accounts reached (90 days)",      val: fmtBig(reach90d),
               note: reach90d  == null ? "Not returned by API" : null },
             { label: "Views (90 days)",                  val: fmtBig(views90d),
-              note: views90d  == null ? "Reels-only metric"  : null },
+              note: views90d  == null ? "Account metric unavailable" : null },
             { label: "Saves (30 days)",                  val: fmtBig(saves30d),
               note: saves30d  == null ? "No posts in window" : null },
             { label: "Reach from non-followers",         val: nonFollowerPct != null ? `${nonFollowerPct}%` : "—",
