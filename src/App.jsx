@@ -300,7 +300,6 @@ function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsE
   const followers      = ig?.followers      ?? null;
   const mediaCount     = ig?.mediaCount     ?? "—";
   const username       = ig?.username       ?? "bybolutife";
-  const engagementRate = ig?.engagementRate ?? null;
 
   // Persist a daily snapshot once we have a real follower count.
   useEffect(() => {
@@ -311,7 +310,32 @@ function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsE
   const g60 = followers !== null ? computeGrowth(followers, 60) : null;
   const g90 = followers !== null ? computeGrowth(followers, 90) : null;
 
-  const reachPosts = (insights?.posts || []).filter(p => p.insights?.reach != null);
+  // Global time-window selector for the Audience tab. Default 30 — matches
+  // what Pels checks in the IG app most often. State only (no persistence) —
+  // a reload back to 30 days is the simpler behaviour and the brief was
+  // explicit about that.
+  const [windowDays, setWindowDays] = useState(30);
+
+  const allPosts = insights?.posts || [];
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  const cutoff = Date.now() - windowMs;
+  const postsInWindow = allPosts.filter(p => p.timestamp && new Date(p.timestamp).getTime() >= cutoff);
+  const allowedIds = new Set(postsInWindow.map(p => p.id));
+  const dataLimited = postsInWindow.length < 12;
+
+  // Engagement rate, recomputed client-side from the windowed posts so it
+  // tracks the selector. Falls back to the server's "last 20 posts" number
+  // if we have no windowed posts at all (cold start).
+  let engagementRate = null;
+  if (postsInWindow.length > 0 && followers) {
+    const totalEng = postsInWindow.reduce((s, p) => s + (p.like_count || 0) + (p.comments_count || 0), 0);
+    const avgEng = totalEng / postsInWindow.length;
+    engagementRate = +(avgEng / followers * 100).toFixed(2);
+  } else if (ig?.engagementRate != null) {
+    engagementRate = ig.engagementRate;
+  }
+
+  const reachPosts = postsInWindow.filter(p => p.insights?.reach != null);
   const avgReach = reachPosts.length
     ? Math.round(reachPosts.reduce((s, p) => s + p.insights.reach, 0) / reachPosts.length)
     : null;
@@ -319,7 +343,7 @@ function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsE
   return (
     <div>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 28 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 14 }}>
         <SectionHeader
           title="Audience Overview"
           sub={ig ? `@${username} · Live from Instagram` : "Connecting to Instagram…"}
@@ -332,6 +356,15 @@ function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsE
         </div>
       </div>
 
+      {/* Time-window selector — scopes top posts, categories, engagement rate.
+          Growth tiles and demographics are deliberately not affected (see brief). */}
+      <TimeWindowSelector
+        value={windowDays}
+        onChange={setWindowDays}
+        postCount={postsInWindow.length}
+        dataLimited={dataLimited && allPosts.length > 0}
+      />
+
       {/* Stat grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 14, marginBottom: 24 }}>
         <StatCard label="Total Followers"  value={loading ? "…" : (followers !== null ? fmt(followers) : "—")} sub={ig ? "Live · Instagram" : "Connect Instagram"} accent={T.salmon} />
@@ -342,26 +375,48 @@ function AudienceSection({ onIgData, onInsightsData, onInsightsLoad, onInsightsE
         <StatCard
           label="Avg. Reach"
           value={avgReach === null ? "…" : fmt(avgReach)}
-          sub={avgReach === null ? "Loading…" : `Avg of last ${reachPosts.length} posts`}
+          sub={avgReach === null ? "Loading…" : `Avg of ${reachPosts.length} posts in window`}
         />
-        <StatCard label="Engagement Rate"  value={loading ? "…" : (engagementRate !== null ? `${engagementRate}%` : "—")} sub="Last 20 posts · live" accent={T.salmon} />
+        <StatCard label="Engagement Rate"  value={loading ? "…" : (engagementRate !== null ? `${engagementRate}%` : "—")} sub={`Last ${windowDays} days · ${postsInWindow.length} posts`} accent={T.salmon} />
       </div>
 
-      {/* Top performing posts (NEW) */}
-      <TopPerformingPosts insights={insights} insightsLoad={insightsLoad} insightsErr={insightsErr} />
+      {/* Top performing posts — scoped to window */}
+      <TopPerformingPosts insights={insights} insightsLoad={insightsLoad} insightsErr={insightsErr} postsInWindow={postsInWindow} windowDays={windowDays} />
 
-      {/* Audience demographics (NEW) */}
+      {/* Audience demographics — exempt from selector, snapshot of recent followers */}
       <DemographicsBlock demos={demos} demosLoad={demosLoad} demosErr={demosErr} />
 
-      {/* Category breakdown — driven by user-tagged posts */}
-      <CategoryBreakdownCard onOpenTagger={onOpenTagger} />
+      {/* Category breakdown — driven by user-tagged posts, scoped to window */}
+      <CategoryBreakdownCard onOpenTagger={onOpenTagger} allowedMediaIds={allowedIds} windowDays={windowDays} />
+    </div>
+  );
+}
+
+// ── Time-window selector (Audience tab only) ─────────────────────────────────
+const WINDOW_OPTIONS = [30, 60, 90, 180, 360];
+function TimeWindowSelector({ value, onChange, postCount, dataLimited }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, padding: "10px 14px", background: T.card, border: `1px solid ${T.border}`, borderRadius: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.08em", textTransform: "uppercase" }}>Window</span>
+        <select
+          value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 4, padding: "5px 10px", fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.text, cursor: "pointer" }}
+        >
+          {WINDOW_OPTIONS.map(d => <option key={d} value={d}>Last {d} days</option>)}
+        </select>
+      </div>
+      <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: dataLimited ? T.warn : T.muted }}>
+        {postCount} post{postCount === 1 ? "" : "s"} in window{dataLimited && " · data-limited (API returns ~50 most recent)"}
+      </span>
     </div>
   );
 }
 
 // ── Content Category Breakdown — real percentages from tagged posts ──────────
-function CategoryBreakdownCard({ onOpenTagger }) {
-  const breakdown = computeCategoryBreakdown(CATEGORIES);
+function CategoryBreakdownCard({ onOpenTagger, allowedMediaIds, windowDays }) {
+  const breakdown = computeCategoryBreakdown(CATEGORIES, allowedMediaIds);
   const { totalTagged, percentages } = breakdown;
 
   if (totalTagged === 0) {
@@ -369,7 +424,9 @@ function CategoryBreakdownCard({ onOpenTagger }) {
       <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginTop: 16 }}>
         <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 12 }}>Content Category Breakdown</div>
         <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.textSoft, lineHeight: 1.55, marginBottom: 18 }}>
-          No posts tagged yet. Tag your last 50 posts in 5 minutes to see your real category split.
+          {windowDays
+            ? `No tagged posts in the last ${windowDays} days. Widen the window or tag more recent posts.`
+            : "No posts tagged yet. Tag your last 50 posts in 5 minutes to see your real category split."}
         </div>
         <SalmonBtn onClick={onOpenTagger}>Tag My Posts</SalmonBtn>
       </div>
@@ -379,7 +436,10 @@ function CategoryBreakdownCard({ onOpenTagger }) {
   const lowSample = totalTagged < 5;
   return (
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginTop: 16 }}>
-      <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 20 }}>Content Category Breakdown</div>
+      <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text, marginBottom: 20 }}>
+        Content Category Breakdown
+        {windowDays && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginLeft: 10, letterSpacing: "0.08em", textTransform: "uppercase" }}>Last {windowDays} days</span>}
+      </div>
       {CATEGORIES.map(cat => {
         const pct = percentages[cat] || 0;
         const color = CATEGORY_COLORS[cat];
@@ -397,24 +457,29 @@ function CategoryBreakdownCard({ onOpenTagger }) {
       })}
       <div style={{ marginTop: 16, fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: lowSample ? T.warn : T.muted, fontStyle: "italic" }}>
         {lowSample
-          ? `Based on ${totalTagged} tagged post${totalTagged === 1 ? "" : "s"} — tag a few more for a more accurate picture.`
-          : `Based on ${totalTagged} tagged posts.`}
+          ? `Based on ${totalTagged} tagged post${totalTagged === 1 ? "" : "s"} in window — tag a few more for a more accurate picture.`
+          : `Based on ${totalTagged} tagged posts in window.`}
       </div>
     </div>
   );
 }
 
 // ── Top Performing Posts (uses /api/instagram-insights) ──────────────────────
-function TopPerformingPosts({ insights, insightsLoad, insightsErr }) {
-  const top = (insights?.posts || []).slice(0, 4);
+function TopPerformingPosts({ insights, insightsLoad, insightsErr, postsInWindow, windowDays }) {
+  // Server already sorted by performance score; respect that ordering after filtering.
+  const sourcePosts = postsInWindow ?? (insights?.posts || []);
+  const top = sourcePosts.slice(0, 4);
   return (
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginBottom: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <div>
           <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text }}>Top Performing Posts</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Ranked by saves + shares — the metrics the algorithm rewards</div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>
+            Ranked by saves + shares — the metrics the algorithm rewards
+            {windowDays && ` · Last ${windowDays} days`}
+          </div>
         </div>
-        {insights && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● {insights.analysed} posts analysed</span>}
+        {insights && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● {sourcePosts.length} of {insights.analysed} in window</span>}
       </div>
 
       {insightsLoad && <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: T.muted, padding: "20px 0" }}>Loading post insights…</div>}
@@ -468,8 +533,11 @@ function DemographicsBlock({ demos, demosLoad, demosErr }) {
     <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 8, padding: "24px 28px", marginBottom: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
         <div>
-          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text }}>Audience Demographics</div>
-          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Last 30 days · the data brand pitches actually need</div>
+          <div style={{ fontFamily: "'Playfair Display',serif", fontSize: 16, color: T.text }}>
+            Audience Demographics
+            <span title="Follower demographics are a snapshot from Instagram's Graph API and aren't affected by the window selector above." style={{ display: "inline-block", marginLeft: 8, width: 14, height: 14, borderRadius: "50%", border: `1px solid ${T.muted}`, color: T.muted, fontSize: 10, lineHeight: "12px", textAlign: "center", cursor: "help", fontFamily: "'DM Sans',sans-serif" }}>i</span>
+          </div>
+          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, marginTop: 4 }}>Recent followers · IG-provided snapshot (not affected by window)</div>
         </div>
         {hasData && <span style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.positive }}>● Live</span>}
       </div>
@@ -1208,7 +1276,7 @@ function MediaKitSection({ igData, insightsData, demosData }) {
         {/* Demographics breakdown — only if data is present */}
         {demosData && (demosData.age?.length || demosData.country?.length) && (
           <div style={{ background: T.card, border: `1px solid ${T.border}`, borderRadius: 6, padding: "20px 24px", marginBottom: 24 }}>
-            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Demographics · Last 30 Days</div>
+            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 11, color: T.muted, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 14 }}>Demographics · Recent Followers</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 24 }}>
               <DemoBars title="Age" rows={demosData.age} />
               <DemoBars title="Top Cities" rows={demosData.city} />

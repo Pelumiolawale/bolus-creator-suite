@@ -66,15 +66,18 @@ export function runMigrations() {
 }
 
 // Returns { totalTagged, byCategory: { [cat]: count }, percentages: { [cat]: pct } }
-export function computeCategoryBreakdown(allCategories) {
+// If `allowedMediaIds` (a Set) is passed, only tags for those media IDs are counted —
+// the Audience tab's time-window selector uses this to scope the breakdown.
+export function computeCategoryBreakdown(allCategories, allowedMediaIds = null) {
   const tags = loadTags();
-  const tagged = Object.values(tags);
+  const entries = Object.entries(tags);
+  const scoped = allowedMediaIds ? entries.filter(([id]) => allowedMediaIds.has(id)) : entries;
   const byCategory = {};
   for (const cat of allCategories) byCategory[cat] = 0;
-  for (const t of tagged) {
+  for (const [, t] of scoped) {
     if (byCategory[t.category] !== undefined) byCategory[t.category] += 1;
   }
-  const total = tagged.length;
+  const total = scoped.length;
   const percentages = {};
   for (const cat of allCategories) {
     percentages[cat] = total > 0 ? (byCategory[cat] / total) * 100 : 0;
